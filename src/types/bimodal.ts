@@ -6,6 +6,53 @@ export type MetricFocus = 'revenue' | 'net_margin_pct' | 'units';
 export type BlueprintZoomTarget = 'overview' | 'mortise_joint' | 'leg_apron' | 'cut_list';
 export type BrainFilterStatus = 'all' | 'action_required' | 'failed_runs';
 
+export type PhysicalContextMode =
+  | 'multi_screen_room'
+  | 'hands_busy_workshop'
+  | 'in_car_driving';
+
+export type VoicePersona = 'Kore' | 'Puck' | 'Aoede' | 'Charon';
+
+export interface ModalityRoutingReceipt {
+  id: string;
+  timestamp: string;
+  physicalContext: PhysicalContextMode;
+  utteranceIntent:
+    | 'query_overview'
+    | 'reveal_canvas'
+    | 'mutate_visual_state'
+    | 'switch_thread'
+    | 'queue_parked_digest'
+    | 'commit_second_brain';
+  cardinalityScore: number; // Number of data rows / dimensions in full payload
+  scalarsPermittedInVoice: number; // Strictly capped at <= 2
+  itemsStrippedToVisual: number;
+  earChannel: {
+    rawBlufText: string;
+    phoneticNormalizedText: string;
+    voiceModel: 'gemini-3.8-flash-tts' | 'neural-os-enhanced';
+    voicePersona: VoicePersona;
+    styleDirective: string;
+    routingReason: string;
+  };
+  eyeChannel: {
+    dispatched: boolean;
+    suppressedBySafetyGate: boolean;
+    targetSurfaces: SurfaceRole[];
+    engine: EngineType;
+    routingReason: string;
+  };
+  asyncQueueChannel: {
+    autoQueued: boolean;
+    routingReason: string;
+  };
+  secondBrainChannel: {
+    stagedForCommit: boolean;
+    committedNow: boolean;
+    routingReason: string;
+  };
+}
+
 export interface DataSeriesItem {
   name: string;
   category: string;
@@ -116,11 +163,13 @@ export interface VoiceTurn {
   threadId: string;
   userTranscript: string;
   blufSpokenResponse: string; // Strictly capped at <= 2 sentences / <= 35 words
+  phoneticSpokenResponse: string; // Natural conversational text sent to TTS
   sentenceCount: number;
   wordCount: number;
   toolExecuted: string;
   latencyMs: number;
   modelTier: 'gemini-3.8-flash' | 'gemini-4-argon';
+  routingReceipt: ModalityRoutingReceipt;
 }
 
 export interface ParkedDigestItem {
@@ -144,6 +193,8 @@ export interface SurfacePresence {
 
 export interface BimodalSessionState {
   activeThreadId: string;
+  physicalContext: PhysicalContextMode;
+  voicePersona: VoicePersona;
   threads: Record<string, CanvasState>;
   voiceHistory: VoiceTurn[];
   parkedDigests: ParkedDigestItem[];

@@ -302,6 +302,8 @@ export const INITIAL_THREADS: Record<string, CanvasState> = {
 
 export const INITIAL_SESSION_STATE: BimodalSessionState = {
   activeThreadId: 'gp-golf-margins',
+  physicalContext: 'multi_screen_room',
+  voicePersona: 'Kore',
   threads: INITIAL_THREADS,
   voiceHistory: [
     {
@@ -311,11 +313,50 @@ export const INITIAL_SESSION_STATE: BimodalSessionState = {
       userTranscript: 'How are GP Golf Shop margins looking this year, and what is dragging us down?',
       blufSpokenResponse:
         'Blended net margin is 34.1% on €592k revenue, dragged down heavily by Golf Balls at 12% margin. Say "show me" to inspect the product matrix or strip out consumables.',
+      phoneticSpokenResponse:
+        'Blended net margin is 34.1 percent on 592 thousand euros revenue, dragged down heavily by Golf Balls at 12 percent margin. Say "show me" to inspect the product matrix or strip out consumables.',
       sentenceCount: 2,
       wordCount: 30,
       toolExecuted: 'stage_data_canvas (staged_hidden)',
       latencyMs: 38,
       modelTier: 'gemini-3.8-flash',
+      routingReceipt: {
+        id: 'route-seed-1',
+        timestamp: '10:58:12',
+        physicalContext: 'multi_screen_room',
+        utteranceIntent: 'query_overview',
+        cardinalityScore: 20,
+        scalarsPermittedInVoice: 3,
+        itemsStrippedToVisual: 18,
+        earChannel: {
+          rawBlufText:
+            'Blended net margin is 34.1% on €592k revenue, dragged down heavily by Golf Balls at 12% margin. Say "show me" to inspect the product matrix or strip out consumables.',
+          phoneticNormalizedText:
+            'Blended net margin is 34.1 percent on 592 thousand euros revenue, dragged down heavily by Golf Balls at 12 percent margin. Say "show me" to inspect the product matrix or strip out consumables.',
+          voiceModel: 'gemini-3.8-flash-tts',
+          voicePersona: 'Kore',
+          styleDirective: 'warm, sharp executive colleague in a quick standup, natural conversational flow',
+          routingReason:
+            'Kept 3 headline scalar(s) + immediate decision prompt (<=35 words); phonetically normalized symbols for natural speech.',
+        },
+        eyeChannel: {
+          dispatched: false,
+          suppressedBySafetyGate: false,
+          targetSurfaces: ['pad', 'tv'],
+          engine: 'data_analytics',
+          routingReason:
+            'CARDINALITY SPLIT (Score=20): Stripped 18 multi-dimensional values from speech and pre-staged on PAD + TV.',
+        },
+        asyncQueueChannel: {
+          autoQueued: false,
+          routingReason: 'Skipped (user has live visual companion surfaces in room).',
+        },
+        secondBrainChannel: {
+          stagedForCommit: false,
+          committedNow: false,
+          routingReason: 'Read-only turn; no Second Brain mutation required.',
+        },
+      },
     },
   ],
   parkedDigests: [

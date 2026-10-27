@@ -7,11 +7,16 @@ import type {
   ChartType,
   DataSeriesItem,
   MetricFocus,
+  ModalityRoutingReceipt,
   ParkedDigestItem,
   PeriodFilter,
   SurfaceRole,
   VoiceTurn,
 } from '../types/bimodal';
+import {
+  evaluateModalityRouting,
+  normalizeForNaturalSpeech,
+} from './modalityRouter';
 
 /**
  * Dual-Guard BLUF Enforcement (Server/Engine Post-Processor).
@@ -29,9 +34,12 @@ export function enforceBlufGuard(rawText: string): {
     .filter(Boolean)
     .join(' ');
 
-  // Match sentences ending with ., !, or ?
-  const sentenceMatches = withoutBullets.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [withoutBullets];
-  const cappedSentences = sentenceMatches.slice(0, 2).map((s) => s.trim());
+  // Match sentences ending with ., !, or ? without splitting inside decimal numbers like 36.6
+  const sentenceMatches = withoutBullets
+    .split(/(?<!\d)[.!?]+(?=\s+|$)/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const cappedSentences = sentenceMatches.slice(0, 2).map((s) => (/[.!?]$/.test(s) ? s : `${s}.`));
   let joined = cappedSentences.join(' ').replace(/\s+/g, ' ').trim();
 
   const words = joined.split(/\s+/).filter(Boolean);
@@ -43,11 +51,10 @@ export function enforceBlufGuard(rawText: string): {
   }
 
   const finalWords = joined.split(/\s+/).filter(Boolean);
-  const finalSentences = (joined.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [joined]).filter((s) => s.trim().length > 0);
 
   return {
     cleanText: joined,
-    sentenceCount: Math.min(finalSentences.length, 2),
+    sentenceCount: Math.min(cappedSentences.length, 2),
     wordCount: finalWords.length,
   };
 }
@@ -97,7 +104,8 @@ export function calculateDataMetrics(
     baselineRev += rev;
     baselineProfit += rev * (marginPct / 100);
   }
-  const baselineMarginPct = baselineRev > 0 ? Number(((baselineProfit / baselineRev) * 100).toFixed(1)) : 0;
+  const baselineMarginPct =
+    baselineRev > 0 ? Number(((baselineProfit / baselineRev) * 100).toFixed(1)) : 0;
 
   const excludedLower = new Set(excludedSeries.map((s) => s.toLowerCase()));
   const activeSeries = series.filter((s) => !excludedLower.has(s.name.toLowerCase()));
@@ -110,7 +118,8 @@ export function calculateDataMetrics(
     totalProfitK += rev * (marginPct / 100);
   }
 
-  const blendedMarginPct = totalRevenueK > 0 ? Number(((totalProfitK / totalRevenueK) * 100).toFixed(1)) : 0;
+  const blendedMarginPct =
+    totalRevenueK > 0 ? Number(((totalProfitK / totalRevenueK) * 100).toFixed(1)) : 0;
   const marginDeltaPct = Number((blendedMarginPct - baselineMarginPct).toFixed(1));
 
   return {
@@ -154,12 +163,18 @@ export interface VoiceCommandExecutionResult {
 
 /**
  * Executes a natural language voice utterance against the Bimodal Session State.
- * Combines Loop 1 (`gemini-3.8-flash`) deterministic tool grammar with schema injection.
+ * Combines Loop 1 (`gemini-3.8-flash`) deterministic tool grammar with schema injection
+ * and the Deterministic Modality Router (`evaluateModalityRouting`).
  */
 export function processVoiceUtterance(
   state: BimodalSessionState,
   rawUtterance: string,
-  nowTimestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  nowTimestamp = new Date().toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }),
+  usingGeminiCloudTts = true
 ): VoiceCommandExecutionResult {
   const startMs = performance.now();
   const utterance = rawUtterance.trim();
@@ -172,6 +187,8 @@ export function processVoiceUtterance(
   let spokenDraft = '';
   let toolExecuted = 'bluf_conversational_reply';
   let modelTier: 'gemini-3.8-flash' | 'gemini-4-argon' = 'gemini-3.8-flash';
+  let utteranceIntent: ModalityRoutingReceipt['utteranceIntent'] = 'query_overview';
+  let explicitTargetSurface: SurfaceRole | null = null;
   let sideEffect: VoiceCommandExecutionResult['sideEffect'] = undefined;
 
   // 1. Check for Thread Context Switching first (can be combined with canvas commands!)
@@ -187,18 +204,25 @@ export function processVoiceUtterance(
     if (nextActiveThreadId !== 'carpenter-workbench') {
       nextActiveThreadId = 'carpenter-workbench';
       toolExecuted = 'switch_or_create_thread("carpenter-workbench")';
+      utteranceIntent = 'switch_thread';
     }
   } else if (
     lower.includes('second brain') &&
-    (lower.includes('switch') || lower.includes('standup') || lower.includes('bot fleet') || lower.includes('pull up'))
+    (lower.includes('switch') ||
+      lower.includes('standup') ||
+      lower.includes('bot fleet') ||
+      lower.includes('pull up'))
   ) {
     if (nextActiveThreadId !== 'second-brain-standup') {
       nextActiveThreadId = 'second-brain-standup';
       toolExecuted = 'switch_or_create_thread("second-brain-standup")';
+      utteranceIntent = 'switch_thread';
     }
   } else if (
     (lower.includes('golf') || lower.includes('sales') || lower.includes('margin')) &&
-    (lower.includes('switch') || lower.includes('back to') || nextActiveThreadId !== 'gp-golf-margins')
+    (lower.includes('switch') ||
+      lower.includes('back to') ||
+      nextActiveThreadId !== 'gp-golf-margins')
   ) {
     if (
       lower.includes('golf') ||
@@ -207,6 +231,7 @@ export function processVoiceUtterance(
     ) {
       nextActiveThreadId = 'gp-golf-margins';
       toolExecuted = 'switch_or_create_thread("gp-golf-margins")';
+      utteranceIntent = 'switch_thread';
     }
   }
 
@@ -221,17 +246,7 @@ export function processVoiceUtterance(
     lower.includes('save for when i park') ||
     lower.includes('android auto')
   ) {
-    const newDigest: ParkedDigestItem = {
-      id: `digest-${Date.now()}`,
-      timestamp: nowTimestamp,
-      threadId: currentCanvas.threadId,
-      threadTitle: currentCanvas.threadTitle,
-      blufSummary: buildCurrentThreadDigestSummary(currentCanvas),
-      keyTakeaways: buildCurrentThreadTakeaways(currentCanvas),
-      deepLinkRoute: `/?thread=${currentCanvas.threadId}&surface=phone`,
-      syncedToSecondBrain: true,
-    };
-    nextParkedDigests.unshift(newDigest);
+    utteranceIntent = 'queue_parked_digest';
     toolExecuted = 'dispatch_mobile_digest("parked_drawer")';
     spokenDraft = `Queued the ${currentCanvas.threadDomain} digest and deep-link to your phone for when you park. Want to keep going or switch threads?`;
   }
@@ -243,6 +258,7 @@ export function processVoiceUtterance(
     lower.includes('save to second brain') ||
     lower.includes('commit it')
   ) {
+    utteranceIntent = 'commit_second_brain';
     modelTier = 'gemini-4-argon';
     const commitSummary = buildCurrentThreadDigestSummary(currentCanvas);
     const slug = `${currentCanvas.threadId}-voice-decision`;
@@ -258,7 +274,7 @@ export function processVoiceUtterance(
     currentCanvas.visibility = 'live_visible';
     currentCanvas.lastMutationDescription = `MCP Commit -> progress/antigravity/2026-10-27-${slug}.md`;
     toolExecuted = `commit_to_second_brain("progress", "${slug}")`;
-    spokenDraft = `Committed the ${currentCanvas.threadDomain} outcome directly to redser-second-brain on main. Ready for your next thread.`;
+    spokenDraft = `Committed the ${currentCanvas.threadDomain} outcome directly to your Second Brain on main. Ready for your next thread.`;
     sideEffect = {
       type: 'commit_second_brain',
       payload: {
@@ -271,11 +287,14 @@ export function processVoiceUtterance(
   }
   // 4. Simulate Early "Show Me" Staging Race Condition (`staging_in_progress`) if requested
   else if (lower.includes('stage new') || lower.includes('deep synthesis')) {
+    utteranceIntent = 'reveal_canvas';
     modelTier = 'gemini-4-argon';
     currentCanvas.visibility = 'staging_in_progress';
-    currentCanvas.lastMutationDescription = 'Loop 2 (gemini-4-argon) synthesizing multi-source payload...';
+    currentCanvas.lastMutationDescription =
+      'Loop 2 (gemini-4-argon) synthesizing multi-source payload...';
     toolExecuted = 'reveal_canvas("auto") [staging_in_progress]';
-    spokenDraft = 'Synthesizing the full Q1-Q4 cross-ledger breakdown now; streaming onto your canvas in two seconds.';
+    spokenDraft =
+      'Synthesizing the full Q1-Q4 cross-ledger breakdown now; streaming onto your canvas in two seconds.';
     sideEffect = {
       type: 'stage_async_resolve',
       payload: { threadId: currentCanvas.threadId },
@@ -286,26 +305,30 @@ export function processVoiceUtterance(
     const mutationsApplied: string[] = [];
 
     // Check explicit surface routing ("throw on tv", "send to ipad", "show me")
-    let requestedSurface: SurfaceRole | null = null;
     if (lower.includes('tv') || lower.includes('wall') || lower.includes('television')) {
-      requestedSurface = 'tv';
+      explicitTargetSurface = 'tv';
     } else if (lower.includes('ipad') || lower.includes('pad') || lower.includes('tablet')) {
-      requestedSurface = 'pad';
-    } else if (lower.includes('show me') || lower.includes('pull up') || lower.includes('display') || lower.includes('open canvas')) {
-      requestedSurface = 'auto';
+      explicitTargetSurface = 'pad';
+    } else if (
+      lower.includes('show me') ||
+      lower.includes('pull up') ||
+      lower.includes('display') ||
+      lower.includes('open canvas')
+    ) {
+      explicitTargetSurface = 'auto';
     }
 
-    if (requestedSurface) {
+    if (explicitTargetSurface) {
       currentCanvas.visibility = 'live_visible';
-      currentCanvas.targetSurfaces = resolveTargetSurfaces(requestedSurface, connectedRoles);
-      mutationsApplied.push(`reveal_canvas("${requestedSurface}")`);
+      currentCanvas.targetSurfaces = resolveTargetSurfaces(explicitTargetSurface, connectedRoles);
+      mutationsApplied.push(`reveal_canvas("${explicitTargetSurface}")`);
+      utteranceIntent = 'reveal_canvas';
     }
 
     // ENGINE 1: Data Analytics Mutations (`gp-golf-margins`)
     if (currentCanvas.engine === 'data_analytics' && currentCanvas.dataSpec) {
       const spec = currentCanvas.dataSpec;
 
-      // Series exclusion ("remove sales of golf balls", "strip out apparel", "exclude drivers")
       const isRemoveIntent =
         lower.includes('remove') ||
         lower.includes('exclude') ||
@@ -323,7 +346,9 @@ export function processVoiceUtterance(
 
       if (isRestoreIntent) {
         if (lower.includes('golf ball')) {
-          spec.excludedSeries = spec.excludedSeries.filter((s) => s.toLowerCase() !== 'golf balls');
+          spec.excludedSeries = spec.excludedSeries.filter(
+            (s) => s.toLowerCase() !== 'golf balls'
+          );
           mutationsApplied.push('includeSeries(["Golf Balls"])');
         } else {
           spec.excludedSeries = [];
@@ -331,19 +356,22 @@ export function processVoiceUtterance(
           mutationsApplied.push('reset_filters()');
         }
         currentCanvas.visibility = 'live_visible';
+        utteranceIntent = 'mutate_visual_state';
       } else if (isRemoveIntent) {
         for (const seriesName of schema.availableSeriesNames) {
           const sLower = seriesName.toLowerCase();
           const keywords = sLower.split(/\s+/).filter((w) => w.length > 3);
           const matched =
             lower.includes(sLower) ||
-            (sLower.includes('golf balls') && (lower.includes('golf ball') || lower.includes('balls'))) ||
+            (sLower.includes('golf balls') &&
+              (lower.includes('golf ball') || lower.includes('balls'))) ||
             keywords.some((kw) => lower.includes(kw));
 
           if (matched && !spec.excludedSeries.includes(seriesName)) {
             spec.excludedSeries.push(seriesName);
             mutationsApplied.push(`excludeSeries(["${seriesName}"])`);
             currentCanvas.visibility = 'live_visible';
+            utteranceIntent = 'mutate_visual_state';
           }
         }
       }
@@ -355,13 +383,15 @@ export function processVoiceUtterance(
         spec.activePeriod = q;
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push(`activePeriod("${q}")`);
+        utteranceIntent = 'mutate_visual_state';
       } else if (lower.includes('full year') || lower.includes('all quarters')) {
         spec.activePeriod = 'ALL';
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push('activePeriod("ALL")');
+        utteranceIntent = 'mutate_visual_state';
       }
 
-      // Chart Type Mutation ("different type of graph", "line chart", "stacked bar", "waterfall", "bar chart")
+      // Chart Type Mutation
       let nextChartType: ChartType | null = null;
       if (lower.includes('stacked')) {
         nextChartType = 'stacked_bar';
@@ -371,7 +401,12 @@ export function processVoiceUtterance(
         nextChartType = 'waterfall';
       } else if (lower.includes('bar')) {
         nextChartType = 'bar';
-      } else if (lower.includes('different type') || lower.includes('another graph') || lower.includes('switch graph') || lower.includes('change chart')) {
+      } else if (
+        lower.includes('different type') ||
+        lower.includes('another graph') ||
+        lower.includes('switch graph') ||
+        lower.includes('change chart')
+      ) {
         const order: ChartType[] = ['bar', 'waterfall', 'line', 'stacked_bar'];
         const idx = order.indexOf(spec.chartType);
         nextChartType = order[(idx + 1) % order.length];
@@ -381,9 +416,10 @@ export function processVoiceUtterance(
         spec.chartType = nextChartType;
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push(`chartType("${nextChartType}")`);
+        utteranceIntent = 'mutate_visual_state';
       }
 
-      // Metric focus ("focus on revenue", "show units", "focus on margin")
+      // Metric focus
       let nextMetric: MetricFocus | null = null;
       if (lower.includes('unit') || lower.includes('volume')) {
         nextMetric = 'units';
@@ -396,6 +432,7 @@ export function processVoiceUtterance(
         spec.metricFocus = nextMetric;
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push(`metricFocus("${nextMetric}")`);
+        utteranceIntent = 'mutate_visual_state';
       }
 
       const metrics = calculateDataMetrics(spec.series, spec.excludedSeries, spec.activePeriod);
@@ -404,12 +441,12 @@ export function processVoiceUtterance(
       if (mutationsApplied.length > 0) {
         toolExecuted = `mutate_data_canvas({ ${mutationsApplied.join(', ')} })`;
         if (spec.excludedSeries.length > 0) {
-          spokenDraft = `Excluded ${spec.excludedSeries.join(' & ')}. ${periodLabel} blended margin jumps from ${metrics.baselineMarginPct}% to ${metrics.blendedMarginPct}% (€${metrics.totalProfitK}k net on €${metrics.totalRevenueK}k).`;
+          spokenDraft = `Excluded ${spec.excludedSeries.join(' and ')}. ${periodLabel} blended margin jumps from ${metrics.baselineMarginPct}% to ${metrics.blendedMarginPct}%, yielding €${metrics.totalProfitK}k net profit.`;
         } else {
-          spokenDraft = `Updated canvas to ${spec.chartType.replace('_', ' ')} for ${periodLabel}: blended margin is ${metrics.blendedMarginPct}% across €${metrics.totalRevenueK}k revenue. Want to strip out Golf Balls to see hard-goods margin?`;
+          spokenDraft = `Switched to ${spec.chartType.replace('_', ' ')} for ${periodLabel}: blended margin is ${metrics.blendedMarginPct}% across €${metrics.totalRevenueK}k revenue. Want to strip out Golf Balls next?`;
         }
       } else {
-        spokenDraft = `${periodLabel} blended margin sits at ${metrics.blendedMarginPct}% on €${metrics.totalRevenueK}k revenue, with Golf Balls at 12% dragging the average down. Say "show me" or "remove sales of golf balls".`;
+        spokenDraft = `${periodLabel} blended margin sits at ${metrics.blendedMarginPct}% on €${metrics.totalRevenueK}k revenue, dragged down by Golf Balls at 12%. Say "show me" or "remove sales of golf balls".`;
       }
     }
 
@@ -417,15 +454,27 @@ export function processVoiceUtterance(
     else if (currentCanvas.engine === 'blueprint_svg' && currentCanvas.blueprintSpec) {
       const bSpec = currentCanvas.blueprintSpec;
 
-      // Zoom Target ("zoom in on the mortise joint", "leg apron", "cut list", "overview")
       let nextZoom: BlueprintZoomTarget | null = null;
-      if (lower.includes('mortise') || lower.includes('tenon') || lower.includes('joint') || lower.includes('zoom in')) {
+      if (
+        lower.includes('mortise') ||
+        lower.includes('tenon') ||
+        lower.includes('joint') ||
+        lower.includes('zoom in')
+      ) {
         nextZoom = 'mortise_joint';
       } else if (lower.includes('apron') || lower.includes('stretcher') || lower.includes('leg')) {
         nextZoom = 'leg_apron';
-      } else if (lower.includes('cut list') || lower.includes('cut-sheet') || lower.includes('schedule')) {
+      } else if (
+        lower.includes('cut list') ||
+        lower.includes('cut-sheet') ||
+        lower.includes('schedule')
+      ) {
         nextZoom = 'cut_list';
-      } else if (lower.includes('overview') || lower.includes('zoom out') || lower.includes('full bench')) {
+      } else if (
+        lower.includes('overview') ||
+        lower.includes('zoom out') ||
+        lower.includes('full bench')
+      ) {
         nextZoom = 'overview';
       }
 
@@ -433,20 +482,21 @@ export function processVoiceUtterance(
         bSpec.zoomTarget = nextZoom;
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push(`zoomTarget("${nextZoom}")`);
+        utteranceIntent = 'mutate_visual_state';
       }
 
-      // Units ("millimeters", "inches", "imperial", "metric")
       if (lower.includes('inch') || lower.includes('imperial')) {
         bSpec.unit = 'in';
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push('unit("in")');
+        utteranceIntent = 'mutate_visual_state';
       } else if (lower.includes('millimeter') || lower.includes('mm') || lower.includes('metric')) {
         bSpec.unit = 'mm';
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push('unit("mm")');
+        utteranceIntent = 'mutate_visual_state';
       }
 
-      // Step completion ("mark step 2 done", "next step")
       const stepMatch = lower.match(/step\s*([1-4])/i);
       if (stepMatch) {
         const stepNum = Number(stepMatch[1]);
@@ -457,18 +507,22 @@ export function processVoiceUtterance(
         }
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push(`toggleStepComplete(${stepNum})`);
+        utteranceIntent = 'mutate_visual_state';
       }
 
       if (mutationsApplied.length > 0) {
         toolExecuted = `mutate_blueprint_canvas({ ${mutationsApplied.join(', ')} })`;
         if (bSpec.zoomTarget === 'mortise_joint') {
-          const dimText = bSpec.unit === 'mm' ? '51mm tenon × 102mm slab depth with 1.5mm drawbore offset' : '2.01 in tenon × 4.02 in depth with 1/16 in drawbore offset';
-          spokenDraft = `Zoomed into the drawbored through-mortise in ${bSpec.unit === 'mm' ? 'millimeters' : 'inches'}: ${dimText}. Ready to mark step 2 complete?`;
+          const dimText =
+            bSpec.unit === 'mm'
+              ? '51mm tenon by 102mm slab depth with a 1.5mm drawbore offset'
+              : '2.01 in tenon by 4.02 in depth with a 1/16 in drawbore offset';
+          spokenDraft = `Zoomed into the drawbored through-mortise: ${dimText}. Ready to mark step 2 complete?`;
         } else {
-          spokenDraft = `Workbench blueprint updated on ${currentCanvas.targetSurfaces.join('/')} (${bSpec.zoomTarget.replace('_', ' ')}, units: ${bSpec.unit}). Next up is step ${bSpec.completedSteps.length + 1}.`;
+          spokenDraft = `Updated the workbench blueprint to ${bSpec.zoomTarget.replace('_', ' ')} in ${bSpec.unit === 'mm' ? 'millimeters' : 'inches'}. Next up is step ${bSpec.completedSteps.length + 1}.`;
         }
       } else {
-        spokenDraft = `Roubo White Oak workbench requires 102mm slab thickness and 51mm through-tenons with a 1.5mm drawbore offset. Say "show me" or "zoom in on the mortise joint".`;
+        spokenDraft = `The White Oak workbench calls for 102mm slab thickness and 51mm through-tenons with a 1.5mm drawbore offset. Say "show me" or "zoom in on the mortise joint".`;
       }
     }
 
@@ -479,7 +533,11 @@ export function processVoiceUtterance(
       let nextFilter: BrainFilterStatus | null = null;
       if (lower.includes('fail') || lower.includes('error') || lower.includes('broken')) {
         nextFilter = 'failed_runs';
-      } else if (lower.includes('action') || lower.includes('open loop') || lower.includes('pending')) {
+      } else if (
+        lower.includes('action') ||
+        lower.includes('open loop') ||
+        lower.includes('pending')
+      ) {
         nextFilter = 'action_required';
       } else if (lower.includes('all card') || lower.includes('show all') || lower.includes('reset')) {
         nextFilter = 'all';
@@ -489,6 +547,7 @@ export function processVoiceUtterance(
         dSpec.filterStatus = nextFilter;
         currentCanvas.visibility = 'live_visible';
         mutationsApplied.push(`filterStatus("${nextFilter}")`);
+        utteranceIntent = 'mutate_visual_state';
       }
 
       const visibleCards = dSpec.cards.filter((c) =>
@@ -497,9 +556,9 @@ export function processVoiceUtterance(
 
       if (mutationsApplied.length > 0) {
         toolExecuted = `mutate_brain_deck({ ${mutationsApplied.join(', ')} })`;
-        spokenDraft = `Showing ${visibleCards.length} Second Brain cards filtered by ${dSpec.filterStatus.replace('_', ' ')} on ${currentCanvas.targetSurfaces.join('/')}. Say "write to Second Brain" to commit a note.`;
+        spokenDraft = `Filtered Second Brain deck to ${visibleCards.length} ${dSpec.filterStatus.replace('_', ' ')} cards. Say "write to Second Brain" to commit this outcome.`;
       } else {
-        spokenDraft = `Fleet standup has 14 healthy runs, 2 isolated parse-vs-empty alerts, and 2 action items. Say "show me", "filter to failed runs", or "write to Second Brain".`;
+        spokenDraft = `Fleet standup has 14 healthy runs, 2 isolated parse-versus-empty alerts, and 2 action items. Say "show me" or "filter to failed runs".`;
       }
     }
 
@@ -510,6 +569,43 @@ export function processVoiceUtterance(
 
   // Enforce the strict Server-Side BLUF Guard (<= 2 sentences, <= 35 words)
   const bluf = enforceBlufGuard(spokenDraft);
+
+  // Run the Deterministic Modality Router to split Ears vs. Eyes vs. Parked Queue vs. Second Brain
+  const routingDecision = evaluateModalityRouting({
+    utterance,
+    intent: utteranceIntent,
+    canvas: currentCanvas,
+    physicalContext: state.physicalContext,
+    voicePersona: state.voicePersona,
+    blufSpokenText: bluf.cleanText,
+    connectedRoles,
+    explicitTargetSurface,
+    nowTimestamp,
+    usingGeminiCloudTts,
+  });
+
+  if (currentCanvas.visibility !== 'staging_in_progress') {
+    currentCanvas.visibility = routingDecision.resolvedVisibility;
+  }
+  currentCanvas.targetSurfaces = routingDecision.resolvedSurfaces;
+
+  if (routingDecision.shouldAutoQueueDigest) {
+    const newDigest: ParkedDigestItem = {
+      id: `digest-${Date.now()}`,
+      timestamp: nowTimestamp,
+      threadId: currentCanvas.threadId,
+      threadTitle:
+        state.physicalContext === 'in_car_driving'
+          ? `[Auto-Routed Driving Safety Gate] ${currentCanvas.threadTitle}`
+          : currentCanvas.threadTitle,
+      blufSummary: buildCurrentThreadDigestSummary(currentCanvas),
+      keyTakeaways: buildCurrentThreadTakeaways(currentCanvas),
+      deepLinkRoute: `/?thread=${currentCanvas.threadId}&surface=phone`,
+      syncedToSecondBrain: true,
+    };
+    nextParkedDigests.unshift(newDigest);
+  }
+
   const elapsedMs = Math.max(8, Math.round(performance.now() - startMs));
 
   currentCanvas.lastMutationLatencyMs = elapsedMs;
@@ -522,11 +618,13 @@ export function processVoiceUtterance(
     threadId: currentCanvas.threadId,
     userTranscript: utterance,
     blufSpokenResponse: bluf.cleanText,
+    phoneticSpokenResponse: normalizeForNaturalSpeech(bluf.cleanText),
     sentenceCount: bluf.sentenceCount,
     wordCount: bluf.wordCount,
     toolExecuted,
     latencyMs: elapsedMs,
     modelTier,
+    routingReceipt: routingDecision.receipt,
   };
 
   const nextState: BimodalSessionState = {
@@ -572,7 +670,7 @@ function buildCurrentThreadTakeaways(canvas: CanvasState): string[] {
     return [
       'Custom Fitting Studio leads at 62% margin (€64k revenue).',
       'Custom Drivers deliver 44% margin (€158k revenue).',
-      'Removing Golf Balls (12% margin) lifts Q3 blended net margin from 28.4% to 39.2%.',
+      'Removing Golf Balls (12% margin) lifts Q3 blended net margin from 36.6% to 44.8%.',
     ];
   }
   if (canvas.engine === 'blueprint_svg' && canvas.blueprintSpec) {

@@ -16,6 +16,7 @@ import {
   extractActiveSchemaContext,
   processVoiceUtterance,
 } from './engine/voiceController';
+import { normalizeForNaturalSpeech } from './engine/modalityRouter';
 import {
   LanPresenceHeader,
   type ViewportSurfaceMode,
@@ -25,7 +26,12 @@ import { DataAnalyticsCanvas } from './components/DataAnalyticsCanvas';
 import { BlueprintSvgCanvas } from './components/BlueprintSvgCanvas';
 import { SecondBrainDeckCanvas } from './components/SecondBrainDeckCanvas';
 import { ParkedDigestDrawer } from './components/ParkedDigestDrawer';
-import type { BimodalSessionState } from './types/bimodal';
+import { ModalityRouterPanel } from './components/ModalityRouterPanel';
+import type {
+  BimodalSessionState,
+  PhysicalContextMode,
+  VoicePersona,
+} from './types/bimodal';
 
 function detectInitialSurfaceMode(): ViewportSurfaceMode {
   if (typeof window === 'undefined') return 'unified';
@@ -39,14 +45,101 @@ function detectInitialSurfaceMode(): ViewportSurfaceMode {
   return 'unified';
 }
 
+/**
+ * Ranks available browser SpeechSynthesis voices to avoid legacy robotic synthesizers
+ * ("Fred", "Albert", "Ralph") and lock onto modern neural/enhanced voices ("Ava", "Samantha", "Daniel", "Karen", "Moira", "Google").
+ */
+function pickBestNeuralBrowserVoice(
+  voices: SpeechSynthesisVoice[],
+  persona: VoicePersona
+): SpeechSynthesisVoice | null {
+  if (!voices || voices.length === 0) return null;
+
+  const englishVoices = voices.filter((v) =>
+    v.lang.toLowerCase().startsWith('en')
+  );
+  const pool = englishVoices.length > 0 ? englishVoices : voices;
+
+  // Strongly penalize novelty/robotic macOS voices
+  const roboticBlacklist = [
+    'fred',
+    'albert',
+    'ralph',
+    'bahh',
+    'bells',
+    'boing',
+    'bubbles',
+    'cellos',
+    'wobble',
+    'jester',
+    'organ',
+    'zarvox',
+    'trinoids',
+    'whisper',
+  ];
+
+  // Persona preference mapping so switching Kore / Puck / Aoede / Charon changes vocal timbre even offline
+  const personaPreferredNames: Record<VoicePersona, string[]> = {
+    Kore: ['samantha', 'ava', 'allison', 'google us english', 'siri', 'karen', 'moira'],
+    Puck: ['daniel', 'oliver', 'google uk english male', 'arthur', 'aaron', 'reed'],
+    Aoede: ['moira', 'karen', 'serena', 'tessa', 'google uk english female', 'flo'],
+    Charon: ['daniel', 'gordon', 'rishi', 'google uk english male', 'eddy'],
+  };
+
+  const preferredList = personaPreferredNames[persona] || personaPreferredNames.Kore;
+
+  const scored = pool.map((v) => {
+    const nameLower = v.name.toLowerCase();
+    let score = 0;
+
+    if (roboticBlacklist.some((bad) => nameLower.includes(bad))) {
+      score -= 1000;
+    }
+    if (nameLower.includes('premium') || nameLower.includes('natural')) {
+      score += 120;
+    }
+    if (nameLower.includes('enhanced') || nameLower.includes('siri')) {
+      score += 90;
+    }
+    if (nameLower.includes('google')) {
+      score += 75;
+    }
+    const prefIdx = preferredList.findIndex((p) => nameLower.includes(p));
+    if (prefIdx !== -1) {
+      score += 80 - prefIdx * 8;
+    }
+    if (v.default) {
+      score += 10;
+    }
+    return { voice: v, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.voice || null;
+}
+
 export const App: React.FC = () => {
   const [session, setSession] = useState<BimodalSessionState>(INITIAL_SESSION_STATE);
   const [surfaceMode, setSurfaceMode] = useState<ViewportSurfaceMode>(detectInitialSurfaceMode);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(true);
-  const [lanEndpoint, setLanEndpoint] = useState('192.168.1.x:4321');
+  const [lanEndpoint, setLanEndpoint] = useState('192.168.1.198:4321');
   const [wsConnected, setWsConnected] = useState(false);
+  const [hasServerGeminiKey, setHasServerGeminiKey] = useState(false);
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem('bimodal_gemini_api_key') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [activeVoiceEngineLabel, setActiveVoiceEngineLabel] = useState<string>(
+    'Neural Phonetic Engine (Kore)'
+  );
+
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   const clientIdRef = useRef<string>(
     (() => {
@@ -67,33 +160,96 @@ export const App: React.FC = () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
 
-  // Stop active speech synthesis (Barge-In support)
+  // Load and rank browser SpeechSynthesis voices so we never default to robotic "Fred"
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    const updateVoices = () => {
+      const list = window.speechSynthesis.getVoices();
+      if (list.length > 0) {
+        setAvailableVoices(list);
+      }
+    };
+    updateVoices();
+    window.speechSynthesis.onvoiceschanged = updateVoices;
+  }, []);
+
+  // Stop active speech synthesis or Gemini 3.8 WAV playback (Barge-In support)
   const stopSpeaking = useCallback(() => {
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current = null;
+    }
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
     setIsSpeaking(false);
   }, []);
 
-  const speakBlufText = useCallback(
-    (text: string) => {
-      if (!ttsEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) {
-        return;
-      }
+  const speakNaturalBluf = useCallback(
+    async (rawText: string, persona: VoicePersona, styleDirective: string) => {
+      if (!ttsEnabled || typeof window === 'undefined') return;
+      stopSpeaking();
+
+      const phoneticText = normalizeForNaturalSpeech(rawText);
+
+      // 1. Call Server Neural TTS (`/api/tts` -> `gemini-3.8-flash-tts` when key present, or 24kHz natural WAV engine)
       try {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 1.06;
-        utterance.pitch = 1.0;
-        utterance.onstart = () => setIsSpeaking(true);
-        utterance.onend = () => setIsSpeaking(false);
-        utterance.onerror = () => setIsSpeaking(false);
-        window.speechSynthesis.speak(utterance);
+        setIsSpeaking(true);
+        const resp = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: phoneticText,
+            voice: persona,
+            style: styleDirective,
+            apiKey: geminiApiKey,
+          }),
+        });
+        const data = await resp.json();
+        if (data?.ok && data?.audioBase64) {
+          setActiveVoiceEngineLabel(
+            `${data.model || 'gemini-3.8-flash-tts'} • ${persona}`
+          );
+          const audio = new Audio(
+            `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`
+          );
+          audioPlayerRef.current = audio;
+          audio.onended = () => setIsSpeaking(false);
+          audio.onerror = () => setIsSpeaking(false);
+          await audio.play();
+          return;
+        }
       } catch {
-        setIsSpeaking(false);
+        // Fall through to Ranked Neural Browser Voice + Phonetic Normalizer (e.g. on static cloud preview)
+      }
+
+      // 2. Ranked Neural OS / Browser Voice + Phonetic Normalizer
+      if ('speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(phoneticText);
+          const bestVoice = pickBestNeuralBrowserVoice(availableVoices, persona);
+          if (bestVoice) {
+            utterance.voice = bestVoice;
+            setActiveVoiceEngineLabel(
+              `Neural Voice: ${bestVoice.name} (${persona} profile)`
+            );
+          } else {
+            setActiveVoiceEngineLabel(`Phonetic Normalizer (${persona})`);
+          }
+          // Natural conversational cadence (not sped-up robotic rate)
+          utterance.rate = 0.98;
+          utterance.pitch = persona === 'Charon' ? 0.94 : 1.0;
+          utterance.onstart = () => setIsSpeaking(true);
+          utterance.onend = () => setIsSpeaking(false);
+          utterance.onerror = () => setIsSpeaking(false);
+          window.speechSynthesis.speak(utterance);
+        } catch {
+          setIsSpeaking(false);
+        }
       }
     },
-    [ttsEnabled]
+    [availableVoices, geminiApiKey, hasServerGeminiKey, stopSpeaking, ttsEnabled]
   );
 
   // Broadcast state patches over both LAN WebSocket and multi-tab BroadcastChannel
@@ -124,6 +280,9 @@ export const App: React.FC = () => {
         if (info?.lanIp) {
           setLanEndpoint(`${info.lanIp}:${info.port || 4321}`);
         }
+        if (info?.hasServerGeminiKey) {
+          setHasServerGeminiKey(true);
+        }
       })
       .catch(() => {
         if (typeof window !== 'undefined') {
@@ -131,7 +290,6 @@ export const App: React.FC = () => {
         }
       });
 
-    // Multi-tab instant sync
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       const bc = new BroadcastChannel('bimodal_voice_companion_bus');
       bc.onmessage = (ev) => {
@@ -142,7 +300,6 @@ export const App: React.FC = () => {
       broadcastChannelRef.current = bc;
     }
 
-    // LAN WebSocket sync
     if (typeof window !== 'undefined') {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${proto}//${window.location.host}/ws-bimodal`;
@@ -186,30 +343,36 @@ export const App: React.FC = () => {
     };
   }, [surfaceMode]);
 
-  // Execute voice command against deterministic engine + Gemini Dual-Loop controller
+  // Execute voice command against deterministic engine + Modality Router
   const handleVoiceCommand = useCallback(
     (utterance: string) => {
-      // Barge-In: Immediately halt any active TTS playback when user speaks
       stopSpeaking();
 
       setSession((prev) => {
-        const result = processVoiceUtterance(prev, utterance);
+        const usingCloudTts = Boolean(geminiApiKey || hasServerGeminiKey);
+        const result = processVoiceUtterance(
+          prev,
+          utterance,
+          undefined,
+          usingCloudTts
+        );
 
-        // Speak the 2-sentence BLUF response
-        speakBlufText(result.turn.blufSpokenResponse);
+        // Speak the phonetically normalized BLUF response via Gemini 3.8 TTS or Ranked Neural Voice
+        void speakNaturalBluf(
+          result.turn.blufSpokenResponse,
+          result.nextState.voicePersona,
+          result.turn.routingReceipt.earChannel.styleDirective
+        );
 
         // Broadcast to all paired LAN surfaces (<50ms)
         broadcastSessionState(result.nextState);
 
-        // Execute side effects (e.g., real Second Brain MCP write or async Loop 2 resolve)
         if (result.sideEffect?.type === 'commit_second_brain') {
           fetch('/api/second-brain/commit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(result.sideEffect.payload),
-          }).catch(() => {
-            // Fallback gracefully when running on static hosting preview
-          });
+          }).catch(() => {});
         } else if (result.sideEffect?.type === 'stage_async_resolve') {
           const targetThreadId = String(result.sideEffect.payload.threadId);
           setTimeout(() => {
@@ -229,10 +392,9 @@ export const App: React.FC = () => {
         return result.nextState;
       });
     },
-    [broadcastSessionState, speakBlufText, stopSpeaking]
+    [broadcastSessionState, geminiApiKey, hasServerGeminiKey, speakNaturalBluf, stopSpeaking]
   );
 
-  // Web Speech API Microphone Toggle with Barge-In
   const handleToggleListening = useCallback(() => {
     stopSpeaking();
 
@@ -245,7 +407,6 @@ export const App: React.FC = () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRec) {
-      // Fallback if browser doesn't expose Web Speech API
       handleVoiceCommand('Show me');
       return;
     }
@@ -284,22 +445,79 @@ export const App: React.FC = () => {
     [broadcastSessionState]
   );
 
+  const handleChangePhysicalContext = useCallback(
+    (physicalContext: PhysicalContextMode) => {
+      setSession((prev) => {
+        const next: BimodalSessionState = {
+          ...prev,
+          physicalContext,
+        };
+        broadcastSessionState(next);
+        return next;
+      });
+    },
+    [broadcastSessionState]
+  );
+
+  const handleChangeVoicePersona = useCallback(
+    (voicePersona: VoicePersona) => {
+      setSession((prev) => {
+        const next: BimodalSessionState = {
+          ...prev,
+          voicePersona,
+        };
+        broadcastSessionState(next);
+        return next;
+      });
+    },
+    [broadcastSessionState]
+  );
+
+  const handleSaveGeminiApiKey = useCallback((key: string) => {
+    setGeminiApiKey(key);
+    try {
+      if (key) {
+        localStorage.setItem('bimodal_gemini_api_key', key);
+      } else {
+        localStorage.removeItem('bimodal_gemini_api_key');
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const activeCanvas = session.threads[session.activeThreadId];
   const activeSchema = extractActiveSchemaContext(activeCanvas);
+  const latestReceipt = session.voiceHistory[0]?.routingReceipt;
 
   return (
     <div className="min-h-screen bg-[#FAF9F6] text-[#1C1917] flex flex-col">
-      {/* Zero-Code LAN Presence & Multi-Surface Switcher Header */}
+      {/* Zero-Code LAN Presence, Gemini 3.8 TTS Key Config & Multi-Surface Switcher Header */}
       <LanPresenceHeader
         surfaces={session.surfaces}
         activeSurfaceMode={surfaceMode}
         onSelectSurfaceMode={setSurfaceMode}
         lanEndpoint={lanEndpoint}
         wsConnected={wsConnected}
+        geminiApiKey={geminiApiKey}
+        onSaveGeminiApiKey={handleSaveGeminiApiKey}
+        activeVoiceEngineLabel={activeVoiceEngineLabel}
       />
 
       {/* Main Responsive Workspace */}
       <main className="mx-auto w-full max-w-[1440px] flex-1 p-5 space-y-6">
+        {/* Deterministic Modality Router & Phonetic Normalizer Telemetry Bar */}
+        {latestReceipt && (
+          <ModalityRouterPanel
+            receipt={latestReceipt}
+            physicalContext={session.physicalContext}
+            voicePersona={session.voicePersona}
+            activeVoiceEngineLabel={activeVoiceEngineLabel}
+            onChangePhysicalContext={handleChangePhysicalContext}
+            onChangeVoicePersona={handleChangeVoicePersona}
+          />
+        )}
+
         <div
           className={`grid gap-6 ${
             surfaceMode === 'unified'
@@ -309,7 +527,13 @@ export const App: React.FC = () => {
         >
           {/* PRIMARY CHANNEL: VOICE JEWEL (Shown in Unified and Phone modes) */}
           {(surfaceMode === 'unified' || surfaceMode === 'phone') && (
-            <div className={surfaceMode === 'unified' ? 'lg:col-span-4' : 'max-w-2xl mx-auto w-full'}>
+            <div
+              className={
+                surfaceMode === 'unified'
+                  ? 'lg:col-span-4'
+                  : 'max-w-2xl mx-auto w-full'
+              }
+            >
               <VoiceJewelPanel
                 session={session}
                 activeCanvas={activeCanvas}
@@ -329,13 +553,11 @@ export const App: React.FC = () => {
           )}
 
           {/* SECONDARY CHANNEL: LIVE VOICE-CONTROLLED VISUAL CANVAS (Shown in Unified, iPad, and TV modes) */}
-          {(surfaceMode === 'unified' || surfaceMode === 'pad' || surfaceMode === 'tv') && (
+          {(surfaceMode === 'unified' ||
+            surfaceMode === 'pad' ||
+            surfaceMode === 'tv') && (
             <div
-              className={
-                surfaceMode === 'unified'
-                  ? 'lg:col-span-8'
-                  : 'w-full'
-              }
+              className={surfaceMode === 'unified' ? 'lg:col-span-8' : 'w-full'}
             >
               <div
                 className={`rounded-2xl border-2 p-5 transition-all flex flex-col justify-between min-h-[620px] ${
@@ -439,10 +661,6 @@ export const App: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Canvas Visibility State Machine:
-                      1. staged_hidden -> Pre-staged Standby Card (until user says "Show me")
-                      2. staging_in_progress -> Shimmer Skeleton (race-condition guard)
-                      3. live_visible -> Full Interactive Voice-Controlled Engine */}
                   {activeCanvas.visibility === 'staging_in_progress' ? (
                     <div className="rounded-xl border-2 border-dashed border-[#C2410C]/50 bg-[#FAF9F6] p-12 text-center space-y-3 animate-pulse">
                       <Loader2 className="h-8 w-8 text-[#C2410C] animate-spin mx-auto" />
@@ -455,18 +673,18 @@ export const App: React.FC = () => {
                     </div>
                   ) : activeCanvas.visibility === 'staged_hidden' ? (
                     <div className="space-y-4">
-                      {/* Pre-Staged Standby Banner (Explains the 2-Stage "Show Me" Modality Contract) */}
                       <div className="rounded-xl border-2 border-dashed border-[#C8C2B7] bg-[#FAF9F6] p-5 flex flex-wrap items-center justify-between gap-4">
                         <div className="space-y-1">
                           <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#C2410C]">
                             <EyeOff className="h-3.5 w-3.5" />
-                            Eyes-Free Default State — Payload Pre-Staged in Background (0ms Wait)
+                            {session.physicalContext === 'in_car_driving'
+                              ? 'Driving Safety Gate Active — Visual Popup Suppressed & Auto-Routed to Phone Queue'
+                              : 'Eyes-Free Default State — Payload Pre-Staged in Background (0ms Wait)'}
                           </div>
                           <p className="text-xs text-[#78716C] max-w-2xl">
-                            The voice agent gave you the 2-sentence BLUF without lecturing you. The detailed{' '}
-                            <strong>{activeCanvas.threadDomain}</strong> artifact is already staged below—say{' '}
-                            <strong>&ldquo;Show me&rdquo;</strong> (or any mutation command like{' '}
-                            <strong>&ldquo;Remove sales of golf balls&rdquo;</strong>) to lock live voice control.
+                            {session.physicalContext === 'in_car_driving'
+                              ? 'Because Physical Context is set to In-Car Driving, the Deterministic Modality Router held back the visual chart and auto-queued a digest to your Phone Parked Drawer below.'
+                              : `The voice agent gave you the 2-sentence BLUF without lecturing you. The detailed ${activeCanvas.threadDomain} artifact is already staged below—say "Show me" to lock live voice control.`}
                           </p>
                         </div>
                         <button
@@ -479,7 +697,6 @@ export const App: React.FC = () => {
                         </button>
                       </div>
 
-                      {/* Preview of the Active Engine */}
                       <div className="opacity-95">
                         {activeCanvas.engine === 'data_analytics' && (
                           <DataAnalyticsCanvas
@@ -525,7 +742,7 @@ export const App: React.FC = () => {
                   )}
                 </div>
 
-                {/* Bottom Active Schema Context Inspector (Loop 1 <-> Loop 2 Handshake) */}
+                {/* Bottom Active Schema Context Inspector */}
                 <div className="mt-5 pt-3 border-t border-[#ECE8E1] flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#78716C]">
                   <div className="flex items-center gap-1.5 truncate">
                     <Terminal className="h-3.5 w-3.5 text-[#C2410C] shrink-0" />
@@ -551,7 +768,13 @@ export const App: React.FC = () => {
         {/* In-Transit / Android Auto Parked Digest Queue ("I'll text you the information") */}
         <ParkedDigestDrawer
           digests={session.parkedDigests}
-          onPlayDigestAudio={speakBlufText}
+          onPlayDigestAudio={(summary) =>
+            void speakNaturalBluf(
+              summary,
+              session.voicePersona,
+              'clear, eyes-free road briefing, warm conversational tone'
+            )
+          }
           onSelectThread={handleSelectThread}
           onTriggerNewDigest={() =>
             handleVoiceCommand('Text me the information for when I park')
