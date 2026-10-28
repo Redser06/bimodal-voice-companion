@@ -431,16 +431,15 @@ export const App: React.FC = () => {
         const active = next.threads[next.activeThreadId];
         if (active) {
           active.visibility = 'live_visible';
-          active.lastMutationDescription = `Screen Takeover Accepted (${device.name} • Fullscreen)`;
+          active.lastMutationDescription = `Screen Takeover Accepted (${device.name} • In-Window Theater Mode)`;
         }
         next.incomingTakeoverPrompt = null;
         broadcastSessionState(next);
         return next;
       });
-
-      if (canvasContainerRef.current && canvasContainerRef.current.requestFullscreen) {
-        canvasContainerRef.current.requestFullscreen().catch(() => {});
-      }
+      // Switch to clean in-window TV/Pad surface view rather than macOS native .requestFullscreen()
+      // to avoid macOS WindowServer + DisplayLinkUserAgent Shield-Window black screen stalls on 8GB M3 Macs.
+      setSurfaceMode(device.surfaceRole === 'tv' ? 'tv' : 'pad');
     },
     [broadcastSessionState]
   );
@@ -458,45 +457,20 @@ export const App: React.FC = () => {
 
   const handleTriggerBrowserCastApi = useCallback(
     (screen: DiscoveredScreenDevice) => {
-      // 0. If this is the LG webOS TV, also trigger the server-side LG webOS SSAP Browser Launcher (ws://192.168.1.161:3000)
-      if (/lg|oled|webos/i.test(screen.name)) {
-        fetch('/api/takeover-screen', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            targetScreenId: screen.id,
-            targetScreenName: screen.name,
-            threadTitle:
-              session.threads[session.activeThreadId]?.threadTitle || 'Bimodal Canvas',
-          }),
-        }).catch(() => {});
-      }
-
-      // 1. Try W3C PresentationRequest API (supported in Chrome for Cast / AirPlay Secondary Screens)
-      const targetUrl = `${window.location.origin}/?surface=${screen.surfaceRole}&takeover=1`;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const PresentationReq = (window as any).PresentationRequest;
-      if (PresentationReq) {
-        try {
-          const req = new PresentationReq([targetUrl]);
-          req.start().catch(() => {
-            window.open(
-              targetUrl,
-              `bimodal_cast_${screen.id}`,
-              'width=1280,height=800,menubar=no,toolbar=no'
-            );
-          });
-          return;
-        } catch {
-          // Fall back to companion projection window
-        }
-      }
-      // 2. Fallback: Open dedicated Cast Receiver Window
-      window.open(
-        targetUrl,
-        `bimodal_cast_${screen.id}`,
-        'width=1280,height=800,menubar=no,toolbar=no'
-      );
+      // Zero-CPU / Zero-GPU Pure JSON Handoff:
+      // Send a lightweight 200-byte SSAP JSON packet to the LG TV's own built-in Web Browser (ws://192.168.1.161:3000)
+      // without invoking Chrome PresentationRequest or macOS AirPlay Mirroring (0% Mac GPU/WindowServer load).
+      fetch('/api/takeover-screen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetScreenId: screen.id,
+          targetScreenName: screen.name,
+          threadTitle:
+            session.threads[session.activeThreadId]?.threadTitle || 'Bimodal Canvas',
+          spawnMacWindow: false,
+        }),
+      }).catch(() => {});
     },
     [session.activeThreadId, session.threads]
   );
