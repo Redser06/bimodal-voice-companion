@@ -52,16 +52,16 @@ export const VoiceJewelPanel: React.FC<VoiceJewelPanelProps> = ({
   // Context-sensitive quick voice utterance chips for 1-tap testing on any device
   const quickVoicePrompts = session.pendingDisambiguation
     ? [
+        'The LG TV',
         "Conor's Laptop",
         'The Samsung TV',
-        'Workbench iPad Pro',
         'Both screens',
       ]
     : activeCanvas.engine === 'data_analytics'
       ? [
           'Show me on the screen',
+          'Show me on the LG TV',
           "Show me on Conor's Laptop",
-          'Show me on Samsung TV',
           'Remove sales of golf balls from the analysis',
           'Zoom in on Q3',
           'Show me this as a waterfall chart',

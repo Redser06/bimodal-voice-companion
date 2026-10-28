@@ -458,6 +458,20 @@ export const App: React.FC = () => {
 
   const handleTriggerBrowserCastApi = useCallback(
     (screen: DiscoveredScreenDevice) => {
+      // 0. If this is the LG webOS TV, also trigger the server-side LG webOS SSAP Browser Launcher (ws://192.168.1.161:3000)
+      if (/lg|oled|webos/i.test(screen.name)) {
+        fetch('/api/takeover-screen', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetScreenId: screen.id,
+            targetScreenName: screen.name,
+            threadTitle:
+              session.threads[session.activeThreadId]?.threadTitle || 'Bimodal Canvas',
+          }),
+        }).catch(() => {});
+      }
+
       // 1. Try W3C PresentationRequest API (supported in Chrome for Cast / AirPlay Secondary Screens)
       const targetUrl = `${window.location.origin}/?surface=${screen.surfaceRole}&takeover=1`;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -484,7 +498,7 @@ export const App: React.FC = () => {
         'width=1280,height=800,menubar=no,toolbar=no'
       );
     },
-    []
+    [session.activeThreadId, session.threads]
   );
 
   const handleTriggerMacWindowSpawn = useCallback(

@@ -100,13 +100,24 @@ export function matchScreenFromUtterance(
   }
 
   const matched: DiscoveredScreenDevice[] = [];
+  const mentionsSamsung = lowerUtterance.includes('samsung') || lowerUtterance.includes('s95');
+  const mentionsLg =
+    lowerUtterance.includes('lg') ||
+    lowerUtterance.includes('oled') ||
+    lowerUtterance.includes('webos') ||
+    lowerUtterance.includes('c16');
+
   for (const screen of discoveredScreens) {
     const nameLower = screen.name.toLowerCase();
     if (
       lowerUtterance.includes(nameLower) ||
-      (screen.surfaceRole === 'tv' &&
+      (mentionsLg && (nameLower.includes('lg') || nameLower.includes('oled'))) ||
+      (mentionsSamsung && nameLower.includes('samsung')) ||
+      (!mentionsLg &&
+        !mentionsSamsung &&
+        screen.surfaceRole === 'tv' &&
+        screen.status === 'online_ready' &&
         (lowerUtterance.includes('tv') ||
-          lowerUtterance.includes('samsung') ||
           lowerUtterance.includes('wall') ||
           lowerUtterance.includes('television'))) ||
       (nameLower.includes('laptop') &&

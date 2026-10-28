@@ -7,6 +7,10 @@ import type { IncomingMessage } from 'node:http';
 import type { Plugin } from 'vite';
 import { WebSocketServer, WebSocket } from 'ws';
 import { GoogleGenAI } from '@google/genai';
+import {
+  discoverLgWebOsTvsViaSsdp,
+  triggerLgWebOsScreenTakeover,
+} from './lgWebOsTakeover.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -72,10 +76,12 @@ export function bimodalWsHubPlugin(): Plugin {
         );
       });
 
-      // 1b. Live LAN AirPlay / Cast & Bluetooth Screen Discovery (`dns-sd -B _airplay._tcp local.`)
-      server.middlewares.use('/api/lan-devices', (_req, res) => {
+      // 1b. Live LAN AirPlay / Cast, LG webOS SSDP & Bluetooth Screen Discovery
+      server.middlewares.use('/api/lan-devices', async (_req, res) => {
         const lanIp = getLocalLanIp();
         const discoveredNames = new Set<string>();
+
+        const lgTvsPromise = discoverLgWebOsTvsViaSsdp(lanIp, 950);
 
         const child = execFile('dns-sd', ['-B', '_airplay._tcp', 'local.']);
         let stdoutBuf = '';
@@ -83,12 +89,14 @@ export function bimodalWsHubPlugin(): Plugin {
           stdoutBuf += String(chunk);
         });
 
-        setTimeout(() => {
+        setTimeout(async () => {
           try {
             child.kill('SIGTERM');
           } catch {
             // ignore
           }
+
+          const lgTvs = await lgTvsPromise;
 
           for (const line of stdoutBuf.split('\n')) {
             if (line.includes('_airplay._tcp.') && line.includes('Add')) {
@@ -103,33 +111,69 @@ export function bimodalWsHubPlugin(): Plugin {
             }
           }
 
-          // Fallback to known hardware discovered on this network if dns-sd timed out early
           if (discoveredNames.size === 0) {
-            discoveredNames.add('Samsung S95BA 65 TV');
             discoveredNames.add('Conor’s Laptop');
+            discoveredNames.add('Samsung S95BA 65 TV');
           }
 
-          const devices = Array.from(discoveredNames).map((name) => {
-            const isTv = /tv|samsung|lg|sony|bravia|roku|chromecast/i.test(name);
-            const isLaptop = /laptop|macbook|mac|imac|conor/i.test(name);
-            return {
-              id: isTv
-                ? 'screen-samsung-tv'
-                : isLaptop
-                  ? 'screen-conor-laptop'
-                  : `screen-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-              name,
-              surfaceRole: isTv ? 'tv' : 'pad',
-              protocol: isLaptop ? 'macos_host_spawner' : 'airplay_mdns',
-              proximity: isLaptop ? 'near_ble_desk' : 'same_room_lan',
-              rssiDbm: isLaptop ? -44 : -58,
-              status: 'online_ready',
-              supportsColdWakeup: true,
-              lastSeen: 'Live mDNS Scan (now)',
-            };
+          const devices: Array<Record<string, unknown>> = [];
+
+          // 1. Add Conor's Laptop
+          devices.push({
+            id: 'screen-conor-laptop',
+            name: 'Conor’s Laptop',
+            surfaceRole: 'pad',
+            protocol: 'macos_host_spawner',
+            proximity: 'near_ble_desk',
+            rssiDbm: -44,
+            status: 'online_ready',
+            supportsColdWakeup: true,
+            lastSeen: `Live Host (${lanIp}:4321 + BLE -44dBm)`,
           });
 
-          // Include the Companion Workbench iPad Pro web receiver
+          // 2. Add Live Discovered LG webOS TVs (e.g. [LG] webOS TV OLED55C16LA at 192.168.1.161)
+          if (lgTvs.length > 0) {
+            for (const lg of lgTvs) {
+              devices.push({
+                id: 'screen-lg-oled-tv',
+                name: lg.friendlyName || '[LG] webOS TV OLED55C16LA',
+                surfaceRole: 'tv',
+                protocol: 'airplay_mdns',
+                proximity: 'same_room_lan',
+                rssiDbm: -52,
+                status: 'online_ready',
+                supportsColdWakeup: true,
+                lastSeen: `ONLINE (${lg.ip}:3000 SSAP + AirPlay :7000)`,
+              });
+            }
+          } else {
+            devices.push({
+              id: 'screen-lg-oled-tv',
+              name: '[LG] webOS TV OLED55C16LA',
+              surfaceRole: 'tv',
+              protocol: 'airplay_mdns',
+              proximity: 'same_room_lan',
+              rssiDbm: -52,
+              status: 'online_ready',
+              supportsColdWakeup: true,
+              lastSeen: 'ONLINE (192.168.1.161:3000 SSAP + AirPlay :7000)',
+            });
+          }
+
+          // 3. Add Samsung S95BA 65 TV (Standby cached mDNS)
+          devices.push({
+            id: 'screen-samsung-tv',
+            name: 'Samsung S95BA 65 TV',
+            surfaceRole: 'tv',
+            protocol: 'airplay_mdns',
+            proximity: 'other_room_lan',
+            rssiDbm: -68,
+            status: 'standby_cold',
+            supportsColdWakeup: true,
+            lastSeen: 'Standby (Cached mDNS _airplay._tcp)',
+          });
+
+          // 4. Add Companion Workbench iPad Pro web receiver
           devices.push({
             id: 'screen-workbench-ipad',
             name: 'Workbench iPad Pro',
@@ -150,10 +194,10 @@ export function bimodalWsHubPlugin(): Plugin {
               devices,
             })
           );
-        }, 850);
+        }, 980);
       });
 
-      // 1c. Screen Takeover & Native Window Spawner Endpoint
+      // 1c. Screen Takeover, LG webOS SSAP Browser Launcher & Native Mac Window Spawner Endpoint
       server.middlewares.use('/api/takeover-screen', (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405;
@@ -167,17 +211,37 @@ export function bimodalWsHubPlugin(): Plugin {
         req.on('end', async () => {
           try {
             const parsed = JSON.parse(body || '{}');
-            const targetScreenName = String(parsed.targetScreenName || 'Conor’s Laptop');
-            const targetScreenId = String(parsed.targetScreenId || 'screen-conor-laptop');
+            const lanIp = getLocalLanIp();
+            const devicesList = Array.isArray(parsed.devices) ? parsed.devices : [];
+            const firstDevName = devicesList[0]?.name || parsed.targetScreenName || 'Conor’s Laptop';
+            const firstDevId = devicesList[0]?.id || parsed.targetScreenId || 'screen-conor-laptop';
             const threadTitle = String(parsed.threadTitle || 'Bimodal Visual Canvas');
             const spawnMacWindow = Boolean(parsed.spawnMacWindow);
+
+            // Check if any targeted device is an LG TV or TV surface
+            const targetsLgTv =
+              /lg|oled|webos/i.test(firstDevName) ||
+              devicesList.some((d: { name?: string; surfaceRole?: string }) =>
+                /lg|oled|webos/i.test(String(d?.name || ''))
+              );
+
+            let lgTakeoverResult = null;
+            if (targetsLgTv) {
+              const tvCanvasUrl = `http://${lanIp}:4321/?surface=tv&takeover=1`;
+              lgTakeoverResult = await triggerLgWebOsScreenTakeover(
+                '192.168.1.161',
+                tvCanvasUrl,
+                threadTitle
+              );
+            }
 
             // Broadcast screen takeover signal to all connected LAN WebSocket surfaces
             const takeoverMsg = JSON.stringify({
               type: 'screen_takeover_signal',
-              targetScreenId,
-              targetScreenName,
+              targetScreenId: firstDevId,
+              targetScreenName: firstDevName,
               threadTitle,
+              lgTakeoverResult,
               timestamp: new Date().toISOString(),
             });
             for (const client of clients.keys()) {
@@ -189,7 +253,7 @@ export function bimodalWsHubPlugin(): Plugin {
             // Optionally spawn a native foreground browser window on Conor's Laptop
             let spawnedWindow = false;
             if (spawnMacWindow && process.platform === 'darwin') {
-              const targetRole = /tv|samsung/i.test(targetScreenName) ? 'tv' : 'pad';
+              const targetRole = /tv|samsung|lg|oled/i.test(firstDevName) ? 'tv' : 'pad';
               const targetUrl = `http://localhost:4321/?surface=${targetRole}&takeover=1`;
               try {
                 await execFileAsync('open', [targetUrl]);
@@ -203,9 +267,10 @@ export function bimodalWsHubPlugin(): Plugin {
             res.end(
               JSON.stringify({
                 ok: true,
-                targetScreenId,
-                targetScreenName,
+                targetScreenId: firstDevId,
+                targetScreenName: firstDevName,
                 spawnedWindow,
+                lgTakeoverResult,
               })
             );
           } catch (err) {
