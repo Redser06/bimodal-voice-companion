@@ -1,13 +1,4 @@
 import React from 'react';
-import {
-  AlertTriangle,
-  Brain,
-  CheckCircle2,
-  Clock,
-  FileCode2,
-  GitCommit,
-  Sparkles,
-} from 'lucide-react';
 import type { BrainFilterStatus, CanvasState } from '../types/bimodal';
 
 interface SecondBrainDeckCanvasProps {
@@ -35,20 +26,21 @@ export const SecondBrainDeckCanvas: React.FC<SecondBrainDeckCanvasProps> = ({
   return (
     <div className="flex flex-col gap-5">
       {/* Top Filter & MCP Commit Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E2DDD5] bg-[#F5F3EF] px-4 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-outline-variant/25 bg-surface-container px-4 py-2.5">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-[#78716C] flex items-center gap-1">
-            <Brain className="h-3.5 w-3.5 text-[#C2410C]" /> Second Brain Filter:
+          <span className="mr-1 text-label-sm font-label-sm uppercase tracking-wider text-outline flex items-center gap-1">
+            <span className="material-symbols-outlined text-[15px] text-primary">neurology</span>
+            Second Brain Filter:
           </span>
           {filterButtons.map((fb) => (
             <button
               key={fb.id}
               type="button"
               onClick={() => onVoiceCommand(fb.cmd)}
-              className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition cursor-pointer ${
+              className={`rounded-lg px-2.5 py-1 text-label-sm font-label-sm transition cursor-pointer ${
                 spec.filterStatus === fb.id
-                  ? 'bg-[#1C1917] text-white'
-                  : 'bg-white text-[#1C1917] border border-[#E2DDD5] hover:border-[#1C1917]'
+                  ? 'bg-primary-container text-surface-container-lowest font-bold'
+                  : 'bg-surface-container-low text-on-surface-variant border border-outline-variant/25 hover:text-on-surface'
               }`}
             >
               {fb.label}
@@ -59,25 +51,27 @@ export const SecondBrainDeckCanvas: React.FC<SecondBrainDeckCanvasProps> = ({
         <button
           type="button"
           onClick={() => onVoiceCommand('Write to Second Brain')}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[#C2410C] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#9A3412] transition cursor-pointer"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary-container px-3 py-1.5 text-label-sm font-label-sm font-bold text-surface-container-lowest hover:bg-primary transition cursor-pointer"
         >
-          <GitCommit className="h-3.5 w-3.5" />
+          <span className="material-symbols-outlined text-[15px]">commit</span>
           MCP Commit Outcome to redser-second-brain
         </button>
       </div>
 
-      {/* Live MCP Commit Banner (when triggered by voice) */}
+      {/* Live MCP Commit Banner */}
       {spec.pendingCommit && (
-        <div className="rounded-xl border-2 border-emerald-600 bg-emerald-50/70 p-4 flex items-start justify-between gap-4">
+        <div className="rounded-xl border border-tertiary/40 bg-tertiary-container/15 p-4 flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-1">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-900">
-              <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+            <div className="flex items-center gap-2 text-label-sm font-label-sm uppercase tracking-wider text-tertiary">
+              <span className="material-symbols-outlined text-[16px]">check_circle</span>
               Written to Second Brain (MCP Direct Commit on main)
             </div>
-            <div className="text-sm font-bold text-[#1C1917]">{spec.pendingCommit.title}</div>
-            <p className="text-xs text-[#78716C]">{spec.pendingCommit.summary}</p>
+            <div className="text-body-md font-semibold text-on-surface">
+              {spec.pendingCommit.title}
+            </div>
+            <p className="text-body-sm text-on-surface-variant">{spec.pendingCommit.summary}</p>
           </div>
-          <code className="rounded-md bg-white px-2.5 py-1 font-mono text-xs font-semibold text-emerald-900 border border-emerald-300 shrink-0">
+          <code className="rounded-md bg-surface-container-lowest px-2.5 py-1 font-telemetry-code text-telemetry-code text-tertiary border border-tertiary/30 shrink-0">
             {spec.pendingCommit.committedPath}
           </code>
         </div>
@@ -93,56 +87,52 @@ export const SecondBrainDeckCanvas: React.FC<SecondBrainDeckCanvasProps> = ({
               key={card.id}
               className={`rounded-xl border p-4 transition flex flex-col justify-between gap-3 ${
                 isFailed
-                  ? 'border-amber-300 bg-amber-50/30'
+                  ? 'border-error/40 bg-error-container/15'
                   : isAction
-                    ? 'border-[#C2410C]/40 bg-white'
-                    : 'border-[#E2DDD5] bg-white'
+                    ? 'border-primary/40 bg-surface-container'
+                    : 'border-outline-variant/25 bg-surface-container'
               }`}
             >
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                    className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-label-sm font-label-sm ${
                       isFailed
-                        ? 'bg-amber-100 text-amber-900'
+                        ? 'bg-error-container/50 text-on-error-container'
                         : isAction
-                          ? 'bg-[#FFEDD5] text-[#C2410C]'
-                          : 'bg-emerald-100 text-emerald-800'
+                          ? 'bg-primary-container/20 text-primary'
+                          : 'bg-tertiary-container/20 text-tertiary'
                     }`}
                   >
-                    {isFailed ? (
-                      <AlertTriangle className="h-3 w-3" />
-                    ) : isAction ? (
-                      <Clock className="h-3 w-3" />
-                    ) : (
-                      <CheckCircle2 className="h-3 w-3" />
-                    )}
+                    <span className="material-symbols-outlined text-[13px]">
+                      {isFailed ? 'warning' : isAction ? 'schedule' : 'check_circle'}
+                    </span>
                     {card.metricBadge}
                   </span>
-                  <span className="font-mono text-[11px] text-[#78716C]">{card.timestamp}</span>
+                  <span className="font-telemetry-code text-telemetry-code text-outline">
+                    {card.timestamp}
+                  </span>
                 </div>
 
-                <h3 className="text-sm font-bold text-[#1C1917] leading-snug">{card.title}</h3>
-                <p className="text-xs text-[#78716C] leading-relaxed">{card.summary}</p>
+                <h3 className="text-body-md font-semibold text-on-surface leading-snug">
+                  {card.title}
+                </h3>
+                <p className="text-body-sm text-on-surface-variant leading-relaxed">
+                  {card.summary}
+                </p>
               </div>
 
-              <div className="flex items-center justify-between pt-2 border-t border-[#ECE8E1] text-[11px] font-mono text-[#78716C]">
-                <span className="flex items-center gap-1 truncate">
-                  <FileCode2 className="h-3.5 w-3.5 text-[#C2410C] shrink-0" />
+              <div className="flex items-center justify-between pt-2 border-t border-outline-variant/20 text-telemetry-code font-telemetry-code text-outline">
+                <span className="flex items-center gap-1.5 truncate">
+                  <span className="material-symbols-outlined text-[14px] text-secondary">
+                    description
+                  </span>
                   {card.sourcePath}
                 </span>
               </div>
             </div>
           );
         })}
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#ECE8E1] bg-[#FAF9F6] px-4 py-2.5 text-xs text-[#78716C]">
-        <span className="flex items-center gap-1.5 font-medium text-[#1C1917]">
-          <Sparkles className="h-3.5 w-3.5 text-[#C2410C]" />
-          Canonical Vault: <code>/Users/conorredmond/projects/redser-second-brain</code>
-        </span>
-        <span className="font-mono">Synthesized by Gemini 4 Argon (gemini-4-argon)</span>
       </div>
     </div>
   );

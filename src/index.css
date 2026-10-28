@@ -1,28 +1,189 @@
 @import "tailwindcss";
 
-:root {
-  /* Archetype 1: Warm Modern SaaS (Linear / Notion / Craft Vibe) */
-  --bg-canvas: #FAF9F6;
-  --bg-surface: #FFFFFF;
-  --bg-subtle: #F5F3EF;
-  --bg-hover: #EFECE6;
-  --border-subtle: #ECE8E1;
-  --border-default: #E2DDD5;
-  --border-active: #C8C2B7;
-  --text-primary: #1C1917;
-  --text-secondary: #78716C;
-  --text-muted: #A8A29E;
-  --accent-primary: #C2410C;
-  --accent-surface: #FFEDD5;
-  --accent-hover: #9A3412;
-  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+@theme {
+  --color-surface: #0f131c;
+  --color-primary-container: #f97316;
+  --color-surface-bright: #353942;
+  --color-tertiary-fixed-dim: #4edea3;
+  --color-background: #0f131c;
+  --color-on-error-container: #ffdad6;
+  --color-surface-tint: #ffb690;
+  --color-secondary-fixed-dim: #4cd7f6;
+  --color-primary-fixed-dim: #ffb690;
+  --color-outline: #a78b7d;
+  --color-on-background: #dfe2ee;
+  --color-surface-container: #1c2028;
+  --color-on-error: #690005;
+  --color-inverse-primary: #9d4300;
+  --color-error: #ffb4ab;
+  --color-primary-fixed: #ffdbca;
+  --color-outline-variant: #584237;
+  --color-surface-container-low: #181c24;
+  --color-on-tertiary-fixed: #002113;
+  --color-surface-dim: #0f131c;
+  --color-error-container: #93000a;
+  --color-on-primary-fixed-variant: #783200;
+  --color-on-surface-variant: #e0c0b1;
+  --color-primary: #ffb690;
+  --color-secondary: #4cd7f6;
+  --color-tertiary-container: #00b07a;
+  --color-on-primary-container: #582200;
+  --color-surface-container-high: #262a33;
+  --color-secondary-fixed: #acedff;
+  --color-surface-container-lowest: #0a0e16;
+  --color-secondary-container: #03b5d3;
+  --color-surface-variant: #31353e;
+  --color-tertiary-fixed: #6ffbbe;
+  --color-on-secondary-fixed-variant: #004e5c;
+  --color-on-secondary-fixed: #001f26;
+  --color-on-tertiary-fixed-variant: #005236;
+  --color-on-secondary-container: #00424e;
+  --color-inverse-surface: #dfe2ee;
+  --color-on-primary-fixed: #341100;
+  --color-on-surface: #dfe2ee;
+  --color-tertiary: #4edea3;
+  --color-on-primary: #552100;
+  --color-surface-container-highest: #31353e;
+  --color-on-secondary: #003640;
+  --color-on-tertiary-container: #003b26;
+  --color-on-tertiary: #003824;
+  --color-inverse-on-surface: #2c3039;
+
+  --font-headline-xl: "Geist", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-headline-lg: "Geist", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-headline-md: "Geist", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body-lg: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body-md: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body-sm: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-label-lg: "JetBrains Mono", ui-monospace, monospace;
+  --font-label-md: "JetBrains Mono", ui-monospace, monospace;
+  --font-label-sm: "JetBrains Mono", ui-monospace, monospace;
+  --font-telemetry-code: "JetBrains Mono", ui-monospace, monospace;
 }
+
+.text-headline-xl {
+  font-size: 30px;
+  line-height: 38px;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+.text-headline-lg {
+  font-size: 22px;
+  line-height: 28px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+.text-headline-md {
+  font-size: 18px;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+}
+.text-body-lg {
+  font-size: 16px;
+  line-height: 24px;
+}
+.text-body-md {
+  font-size: 14px;
+  line-height: 20px;
+}
+.text-body-sm {
+  font-size: 12px;
+  line-height: 16px;
+}
+.text-label-lg {
+  font-size: 13px;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  font-weight: 600;
+}
+.text-label-md {
+  font-size: 11px;
+  line-height: 14px;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+.text-label-sm {
+  font-size: 10px;
+  line-height: 12px;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+}
+.text-telemetry-code {
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.material-symbols-fill {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 28px -2px rgba(249, 115, 22, 0.4), inset 0 0 18px rgba(249, 115, 22, 0.3);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 48px 4px rgba(249, 115, 22, 0.65), inset 0 0 28px rgba(249, 115, 22, 0.5);
+    transform: scale(1.025);
+  }
+}
+
+@keyframes waveRing {
+  0% {
+    transform: scale(0.92);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.48);
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.92); opacity: 0.8; }
+  50% { transform: scale(1.18); opacity: 0.25; }
+  100% { transform: scale(0.92); opacity: 0.8; }
+}
+
+@keyframes audioPulse {
+  0%, 100% { height: 6px; }
+  50% { height: 22px; }
+}
+
+.voice-orb-active {
+  animation: pulseGlow 3.2s ease-in-out infinite;
+}
+.voice-orb-glow {
+  animation: pulseGlow 3s ease-in-out infinite;
+}
+.wave-ripple {
+  animation: waveRing 3s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+.animate-pulse-halo {
+  animation: pulse-ring 3.2s ease-in-out infinite;
+}
+.bar-anim-1, .bar-1 { animation: audioPulse 1.2s ease-in-out infinite 0.1s; }
+.bar-anim-2, .bar-2 { animation: audioPulse 1.2s ease-in-out infinite 0.35s; }
+.bar-anim-3, .bar-3 { animation: audioPulse 1.2s ease-in-out infinite 0.2s; }
+.bar-anim-4, .bar-4 { animation: audioPulse 1.2s ease-in-out infinite 0.5s; }
+.bar-anim-5, .bar-5 { animation: audioPulse 1.2s ease-in-out infinite 0.15s; }
+.bar-anim-6 { animation: audioPulse 1.2s ease-in-out infinite 0.4s; }
 
 body {
   margin: 0;
-  background-color: var(--bg-canvas);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
+  background-color: #0a0e16;
+  color: #dfe2ee;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
