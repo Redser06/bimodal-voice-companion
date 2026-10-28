@@ -13,12 +13,47 @@ export type PhysicalContextMode =
 
 export type VoicePersona = 'Kore' | 'Puck' | 'Aoede' | 'Charon';
 
+export interface DiscoveredScreenDevice {
+  id: string;
+  name: string; // e.g. "Samsung S95BA 65 TV" | "Conor’s Laptop" | "Workbench iPad Pro"
+  surfaceRole: 'tv' | 'pad' | 'phone';
+  protocol:
+    | 'airplay_mdns'
+    | 'chromecast_mdns'
+    | 'macos_host_spawner'
+    | 'websocket_warm_tab'
+    | 'ble_continuity';
+  proximity: 'near_ble_desk' | 'same_room_lan' | 'other_room_lan';
+  rssiDbm?: number; // e.g. -52 dBm for Bluetooth proximity
+  status: 'online_ready' | 'standby_cold' | 'projecting_active';
+  supportsColdWakeup: boolean;
+  lastSeen: string;
+}
+
+export interface PendingScreenDisambiguation {
+  active: boolean;
+  originalUtterance: string;
+  candidateScreens: DiscoveredScreenDevice[];
+  promptedAt: string;
+}
+
+export interface IncomingTakeoverPrompt {
+  id: string;
+  sourceDeviceName: string;
+  targetDevice: DiscoveredScreenDevice;
+  threadTitle: string;
+  engine: EngineType;
+  mode: 'ask_permission' | 'auto_accepted';
+  timestamp: string;
+}
+
 export interface ModalityRoutingReceipt {
   id: string;
   timestamp: string;
   physicalContext: PhysicalContextMode;
   utteranceIntent:
     | 'query_overview'
+    | 'disambiguate_screen'
     | 'reveal_canvas'
     | 'mutate_visual_state'
     | 'switch_thread'
@@ -38,7 +73,9 @@ export interface ModalityRoutingReceipt {
   eyeChannel: {
     dispatched: boolean;
     suppressedBySafetyGate: boolean;
+    awaitingDisambiguation?: boolean;
     targetSurfaces: SurfaceRole[];
+    targetDeviceNames?: string[];
     engine: EngineType;
     routingReason: string;
   };
@@ -147,6 +184,7 @@ export interface CanvasState {
   threadDomain: string;
   visibility: 'staging_in_progress' | 'staged_hidden' | 'live_visible';
   targetSurfaces: SurfaceRole[];
+  lockedDeviceIds?: string[];
   engine: EngineType;
   lastMutationDescription: string;
   lastMutationLatencyMs: number;
@@ -195,6 +233,11 @@ export interface BimodalSessionState {
   activeThreadId: string;
   physicalContext: PhysicalContextMode;
   voicePersona: VoicePersona;
+  requireDisambiguationWhenMultipleScreens: boolean;
+  autoAcceptScreenTakeover: boolean;
+  discoveredScreens: DiscoveredScreenDevice[];
+  pendingDisambiguation: PendingScreenDisambiguation | null;
+  incomingTakeoverPrompt: IncomingTakeoverPrompt | null;
   threads: Record<string, CanvasState>;
   voiceHistory: VoiceTurn[];
   parkedDigests: ParkedDigestItem[];
@@ -207,4 +250,5 @@ export interface ActiveSchemaContext {
   availableSeriesNames: string[];
   availableZoomTargets: BlueprintZoomTarget[];
   availableCardIds: string[];
+  discoveredScreenNames: string[];
 }

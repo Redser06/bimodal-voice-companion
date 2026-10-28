@@ -300,10 +300,51 @@ export const INITIAL_THREADS: Record<string, CanvasState> = {
   },
 };
 
+export const INITIAL_DISCOVERED_SCREENS: BimodalSessionState['discoveredScreens'] = [
+  {
+    id: 'screen-conor-laptop',
+    name: 'Conor’s Laptop',
+    surfaceRole: 'pad',
+    protocol: 'macos_host_spawner',
+    proximity: 'near_ble_desk',
+    rssiDbm: -48,
+    status: 'online_ready',
+    supportsColdWakeup: true,
+    lastSeen: 'Live (mDNS + BLE -48dBm)',
+  },
+  {
+    id: 'screen-samsung-tv',
+    name: 'Samsung S95BA 65 TV',
+    surfaceRole: 'tv',
+    protocol: 'airplay_mdns',
+    proximity: 'same_room_lan',
+    rssiDbm: -64,
+    status: 'standby_cold',
+    supportsColdWakeup: true,
+    lastSeen: 'Live (_airplay._tcp.local.)',
+  },
+  {
+    id: 'screen-workbench-ipad',
+    name: 'Workbench iPad Pro',
+    surfaceRole: 'pad',
+    protocol: 'websocket_warm_tab',
+    proximity: 'other_room_lan',
+    rssiDbm: -74,
+    status: 'online_ready',
+    supportsColdWakeup: false,
+    lastSeen: 'LAN 192.168.1.44',
+  },
+];
+
 export const INITIAL_SESSION_STATE: BimodalSessionState = {
   activeThreadId: 'gp-golf-margins',
   physicalContext: 'multi_screen_room',
   voicePersona: 'Kore',
+  requireDisambiguationWhenMultipleScreens: true,
+  autoAcceptScreenTakeover: false,
+  discoveredScreens: INITIAL_DISCOVERED_SCREENS,
+  pendingDisambiguation: null,
+  incomingTakeoverPrompt: null,
   threads: INITIAL_THREADS,
   voiceHistory: [
     {

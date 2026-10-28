@@ -41,19 +41,47 @@ describe('Bimodal Voice + Visual Companion Controller & Deterministic Modality R
     expect(phonetic).not.toContain('€158k');
   });
 
-  it('reveals pre-staged canvas immediately on "Show me" and routes deterministically to connected pad/tv surfaces', () => {
+  it('triggers a 2-second voice disambiguation pushback ("Which screen do you want?") on ambiguous "Show me" when multiple LAN/Bluetooth screens are discovered, then locks and takes over on Turn 2', () => {
     const initial = structuredClone(INITIAL_SESSION_STATE);
     expect(initial.threads['gp-golf-margins'].visibility).toBe('staged_hidden');
+    expect(initial.discoveredScreens.length).toBeGreaterThan(1);
 
-    const { nextState, turn } = processVoiceUtterance(initial, 'Show me');
-    const updatedCanvas = nextState.threads['gp-golf-margins'];
+    // Turn 1: Ambiguous "Show me on the screen" -> AI asks which screen the user wants
+    const turn1 = processVoiceUtterance(initial, 'Show me on the screen');
+    expect(turn1.turn.routingReceipt.utteranceIntent).toBe('disambiguate_screen');
+    expect(turn1.turn.toolExecuted).toContain('ask_screen_disambiguation(');
+    expect(turn1.nextState.pendingDisambiguation).not.toBeNull();
+    expect(turn1.nextState.threads['gp-golf-margins'].visibility).toBe('staged_hidden');
+    expect(turn1.turn.blufSpokenResponse).toContain('Which screen do you want');
+    expect(turn1.turn.sentenceCount).toBeLessThanOrEqual(2);
 
+    // Turn 2: User replies by voice ("Samsung TV") -> AI locks screen, reveals canvas, and fires takeover prompt
+    const turn2 = processVoiceUtterance(turn1.nextState, 'The Samsung TV');
+    const updatedCanvas = turn2.nextState.threads['gp-golf-margins'];
+
+    expect(turn2.nextState.pendingDisambiguation).toBeNull();
     expect(updatedCanvas.visibility).toBe('live_visible');
-    expect(updatedCanvas.targetSurfaces).toEqual(['pad', 'tv']);
-    expect(turn.toolExecuted).toContain('reveal_canvas("auto")');
-    expect(turn.sentenceCount).toBeLessThanOrEqual(2);
-    expect(turn.routingReceipt.cardinalityScore).toBe(20);
-    expect(turn.routingReceipt.itemsStrippedToVisual).toBe(18);
+    expect(updatedCanvas.targetSurfaces).toEqual(['tv']);
+    expect(turn2.turn.toolExecuted).toContain('lock_and_takeover_screen([');
+    expect(turn2.turn.toolExecuted).toContain('Samsung S95BA 65 TV');
+    expect(turn2.sideEffect?.type).toBe('trigger_screen_takeover');
+    expect(turn2.nextState.incomingTakeoverPrompt?.targetDevice.name).toBe(
+      'Samsung S95BA 65 TV'
+    );
+  });
+
+  it('bypasses disambiguation when the user names the target screen directly ("Show me on Conor\'s Laptop")', () => {
+    const initial = structuredClone(INITIAL_SESSION_STATE);
+    const { nextState, turn, sideEffect } = processVoiceUtterance(
+      initial,
+      "Show me on Conor's Laptop"
+    );
+
+    expect(nextState.pendingDisambiguation).toBeNull();
+    expect(nextState.threads['gp-golf-margins'].visibility).toBe('live_visible');
+    expect(nextState.threads['gp-golf-margins'].targetSurfaces).toEqual(['pad']);
+    expect(turn.toolExecuted).toContain('takeover_screen(["Conor’s Laptop"])');
+    expect(sideEffect?.type).toBe('trigger_screen_takeover');
   });
 
   it('executes voice series exclusion ("remove sales of golf balls from the analysis and zoom in on Q3") and recalculates net margin', () => {

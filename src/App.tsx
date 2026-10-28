@@ -27,8 +27,10 @@ import { BlueprintSvgCanvas } from './components/BlueprintSvgCanvas';
 import { SecondBrainDeckCanvas } from './components/SecondBrainDeckCanvas';
 import { ParkedDigestDrawer } from './components/ParkedDigestDrawer';
 import { ModalityRouterPanel } from './components/ModalityRouterPanel';
+import { ScreenTakeoverModal } from './components/ScreenTakeoverModal';
 import type {
   BimodalSessionState,
+  DiscoveredScreenDevice,
   PhysicalContextMode,
   VoicePersona,
 } from './types/bimodal';
@@ -140,6 +142,7 @@ export const App: React.FC = () => {
   );
 
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const canvasContainerRef = useRef<HTMLDivElement | null>(null);
 
   const clientIdRef = useRef<string>(
     (() => {
@@ -373,6 +376,12 @@ export const App: React.FC = () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(result.sideEffect.payload),
           }).catch(() => {});
+        } else if (result.sideEffect?.type === 'trigger_screen_takeover') {
+          fetch('/api/takeover-screen', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(result.sideEffect.payload),
+          }).catch(() => {});
         } else if (result.sideEffect?.type === 'stage_async_resolve') {
           const targetThreadId = String(result.sideEffect.payload.threadId);
           setTimeout(() => {
@@ -394,6 +403,145 @@ export const App: React.FC = () => {
     },
     [broadcastSessionState, geminiApiKey, hasServerGeminiKey, speakNaturalBluf, stopSpeaking]
   );
+
+  // Live LAN mDNS / AirPlay (`dns-sd`) & Bluetooth Discovery Rescan
+  const handleRescanLanDevices = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/lan-devices');
+      const data = await resp.json();
+      if (data?.ok && Array.isArray(data.devices)) {
+        setSession((prev) => {
+          const next: BimodalSessionState = {
+            ...prev,
+            discoveredScreens: data.devices as DiscoveredScreenDevice[],
+          };
+          broadcastSessionState(next);
+          return next;
+        });
+      }
+    } catch {
+      // Keep existing discovered screens when running on static preview
+    }
+  }, [broadcastSessionState]);
+
+  const handleAcceptAndFullscreenTakeover = useCallback(
+    (device: DiscoveredScreenDevice) => {
+      setSession((prev) => {
+        const next = structuredClone(prev);
+        const active = next.threads[next.activeThreadId];
+        if (active) {
+          active.visibility = 'live_visible';
+          active.lastMutationDescription = `Screen Takeover Accepted (${device.name} • Fullscreen)`;
+        }
+        next.incomingTakeoverPrompt = null;
+        broadcastSessionState(next);
+        return next;
+      });
+
+      if (canvasContainerRef.current && canvasContainerRef.current.requestFullscreen) {
+        canvasContainerRef.current.requestFullscreen().catch(() => {});
+      }
+    },
+    [broadcastSessionState]
+  );
+
+  const handleDismissTakeoverPrompt = useCallback(() => {
+    setSession((prev) => {
+      const next: BimodalSessionState = {
+        ...prev,
+        incomingTakeoverPrompt: null,
+      };
+      broadcastSessionState(next);
+      return next;
+    });
+  }, [broadcastSessionState]);
+
+  const handleTriggerBrowserCastApi = useCallback(
+    (screen: DiscoveredScreenDevice) => {
+      // 1. Try W3C PresentationRequest API (supported in Chrome for Cast / AirPlay Secondary Screens)
+      const targetUrl = `${window.location.origin}/?surface=${screen.surfaceRole}&takeover=1`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const PresentationReq = (window as any).PresentationRequest;
+      if (PresentationReq) {
+        try {
+          const req = new PresentationReq([targetUrl]);
+          req.start().catch(() => {
+            window.open(
+              targetUrl,
+              `bimodal_cast_${screen.id}`,
+              'width=1280,height=800,menubar=no,toolbar=no'
+            );
+          });
+          return;
+        } catch {
+          // Fall back to companion projection window
+        }
+      }
+      // 2. Fallback: Open dedicated Cast Receiver Window
+      window.open(
+        targetUrl,
+        `bimodal_cast_${screen.id}`,
+        'width=1280,height=800,menubar=no,toolbar=no'
+      );
+    },
+    []
+  );
+
+  const handleTriggerMacWindowSpawn = useCallback(
+    async (screen: DiscoveredScreenDevice) => {
+      try {
+        const resp = await fetch('/api/takeover-screen', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetScreenId: screen.id,
+            targetScreenName: screen.name,
+            threadTitle:
+              session.threads[session.activeThreadId]?.threadTitle || 'Bimodal Canvas',
+            spawnMacWindow: true,
+          }),
+        });
+        const data = await resp.json();
+        if (!data?.spawnedWindow) {
+          window.open(
+            `${window.location.origin}/?surface=${screen.surfaceRole}&takeover=1`,
+            `bimodal_mac_${screen.id}`,
+            'width=1200,height=820'
+          );
+        }
+      } catch {
+        window.open(
+          `${window.location.origin}/?surface=${screen.surfaceRole}&takeover=1`,
+          `bimodal_mac_${screen.id}`,
+          'width=1200,height=820'
+        );
+      }
+    },
+    [session.activeThreadId, session.threads]
+  );
+
+  const handleToggleRequireDisambiguation = useCallback(() => {
+    setSession((prev) => {
+      const next: BimodalSessionState = {
+        ...prev,
+        requireDisambiguationWhenMultipleScreens:
+          !prev.requireDisambiguationWhenMultipleScreens,
+      };
+      broadcastSessionState(next);
+      return next;
+    });
+  }, [broadcastSessionState]);
+
+  const handleToggleAutoAcceptTakeover = useCallback(() => {
+    setSession((prev) => {
+      const next: BimodalSessionState = {
+        ...prev,
+        autoAcceptScreenTakeover: !prev.autoAcceptScreenTakeover,
+      };
+      broadcastSessionState(next);
+      return next;
+    });
+  }, [broadcastSessionState]);
 
   const handleToggleListening = useCallback(() => {
     stopSpeaking();
@@ -518,6 +666,23 @@ export const App: React.FC = () => {
           />
         )}
 
+        {/* Live Network / Bluetooth Screen Discovery + 2-Second Voice Screen Disambiguation + Incoming Takeover Prompt */}
+        <ScreenTakeoverModal
+          discoveredScreens={session.discoveredScreens}
+          pendingDisambiguation={session.pendingDisambiguation}
+          incomingTakeoverPrompt={session.incomingTakeoverPrompt}
+          requireDisambiguation={session.requireDisambiguationWhenMultipleScreens}
+          autoAcceptTakeover={session.autoAcceptScreenTakeover}
+          onToggleRequireDisambiguation={handleToggleRequireDisambiguation}
+          onToggleAutoAcceptTakeover={handleToggleAutoAcceptTakeover}
+          onVoiceCommand={handleVoiceCommand}
+          onDismissTakeoverPrompt={handleDismissTakeoverPrompt}
+          onAcceptAndFullscreenTakeover={handleAcceptAndFullscreenTakeover}
+          onTriggerBrowserCastApi={handleTriggerBrowserCastApi}
+          onTriggerMacWindowSpawn={handleTriggerMacWindowSpawn}
+          onRescanLanDevices={handleRescanLanDevices}
+        />
+
         <div
           className={`grid gap-6 ${
             surfaceMode === 'unified'
@@ -557,6 +722,7 @@ export const App: React.FC = () => {
             surfaceMode === 'pad' ||
             surfaceMode === 'tv') && (
             <div
+              ref={canvasContainerRef}
               className={surfaceMode === 'unified' ? 'lg:col-span-8' : 'w-full'}
             >
               <div
