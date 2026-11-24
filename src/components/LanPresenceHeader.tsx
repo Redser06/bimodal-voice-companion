@@ -145,18 +145,24 @@ export const LanPresenceHeader: React.FC<LanPresenceHeaderProps> = ({
       {showKeyInput && (
         <div className="mx-auto max-w-[1440px] mt-3 rounded-xl border border-[#E2DDD5] bg-[#FAF9F6] p-3 flex flex-wrap items-center justify-between gap-3">
           <div className="text-xs text-[#78716C]">
-            Paste a <code>GEMINI_API_KEY</code> to stream studio-grade 24kHz WAV audio from{' '}
+            Enter a Gemini API key to stream studio-grade 24kHz WAV audio from{' '}
             <strong>gemini-3.8-flash-tts</strong> (Kore / Puck / Aoede personas with{' '}
-            <code>speech_metadata</code> style steering). Stored only in browser{' '}
-            <code>localStorage</code>. Without a key, the app uses Ranked Neural OS Voices +
-            Phonetic Speech Normalization.
+            <code>speech_metadata</code> style steering). It is saved only in this browser&apos;s{' '}
+            <code>localStorage</code> and sent with each speech request. The server does not store it.
+            Without a key, the app uses Ranked Neural OS Voices + Phonetic Speech Normalization.
           </div>
           <div className="flex items-center gap-2">
+            <label htmlFor="lan-gemini-api-key" className="text-xs font-semibold text-[#1C1917]">
+              Gemini API key
+            </label>
             <input
+              id="lan-gemini-api-key"
               type="password"
+              autoComplete="off"
+              spellCheck={false}
               value={draftKey}
               onChange={(e) => setDraftKey(e.target.value)}
-              placeholder="AIzaSy..."
+              placeholder="Stored only in this browser"
               className="rounded-lg border border-[#E2DDD5] bg-white px-3 py-1 text-xs font-mono text-[#1C1917] w-64"
             />
             <button
@@ -168,6 +174,16 @@ export const LanPresenceHeader: React.FC<LanPresenceHeaderProps> = ({
               className="rounded-lg bg-[#1C1917] px-3 py-1 text-xs font-semibold text-white hover:bg-[#C2410C] cursor-pointer"
             >
               Save Key
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraftKey('');
+                onSaveGeminiApiKey('');
+              }}
+              className="rounded-lg border border-[#E2DDD5] bg-white px-3 py-1 text-xs font-semibold text-[#1C1917] hover:border-[#C2410C] cursor-pointer"
+            >
+              Clear
             </button>
           </div>
         </div>
