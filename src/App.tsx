@@ -6,6 +6,7 @@ import {
 } from './engine/voiceController';
 import { normalizeForNaturalSpeech } from './engine/modalityRouter';
 import { type ViewportSurfaceMode } from './components/LanPresenceHeader';
+import { readBrowserGeminiApiKey, writeBrowserGeminiApiKey } from './geminiKeyStorage';
 import { DataAnalyticsCanvas } from './components/DataAnalyticsCanvas';
 import { BlueprintSvgCanvas } from './components/BlueprintSvgCanvas';
 import { SecondBrainDeckCanvas } from './components/SecondBrainDeckCanvas';
@@ -110,14 +111,10 @@ export const App: React.FC = () => {
   const [customUtterance, setCustomUtterance] = useState('');
   const [lanEndpoint, setLanEndpoint] = useState('192.168.1.198:4321');
   const [wsConnected, setWsConnected] = useState(false);
-  const [hasServerGeminiKey, setHasServerGeminiKey] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
-    try {
-      return localStorage.getItem('bimodal_gemini_api_key') || '';
-    } catch {
-      return '';
-    }
+    if (typeof window === 'undefined') return '';
+    return readBrowserGeminiApiKey(window.localStorage);
   });
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [activeVoiceEngineLabel, setActiveVoiceEngineLabel] = useState<string>(
@@ -183,35 +180,40 @@ export const App: React.FC = () => {
 
       const phoneticText = normalizeForNaturalSpeech(rawText);
 
-      try {
-        setIsSpeaking(true);
-        const resp = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: phoneticText,
-            voice: persona,
-            style: styleDirective,
-            apiKey: geminiApiKey,
-          }),
-        });
-        const data = await resp.json();
-        if (data?.ok && data?.audioBase64) {
-          setActiveVoiceEngineLabel(
-            `${data.model || 'gemini-3.8-flash-tts'} · ${persona}`
-          );
-          const audio = new Audio(
-            `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`
-          );
-          audio.playbackRate = playbackSpeed;
-          audioPlayerRef.current = audio;
-          audio.onended = () => setIsSpeaking(false);
-          audio.onerror = () => setIsSpeaking(false);
-          await audio.play();
-          return;
+      if (geminiApiKey) {
+        try {
+          setIsSpeaking(true);
+          const resp = await fetch('/api/tts', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-gemini-api-key': geminiApiKey,
+            },
+            body: JSON.stringify({
+              text: phoneticText,
+              voice: persona,
+              style: styleDirective,
+              apiKey: geminiApiKey,
+            }),
+          });
+          const data = await resp.json();
+          if (data?.ok && data?.audioBase64) {
+            setActiveVoiceEngineLabel(
+              `${data.model || 'gemini-3.8-flash-tts'} · ${persona}`
+            );
+            const audio = new Audio(
+              `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`
+            );
+            audio.playbackRate = playbackSpeed;
+            audioPlayerRef.current = audio;
+            audio.onended = () => setIsSpeaking(false);
+            audio.onerror = () => setIsSpeaking(false);
+            await audio.play();
+            return;
+          }
+        } catch {
+          // Fall through to Ranked Neural Browser Voice + Phonetic Normalizer
         }
-      } catch {
-        // Fall through to Ranked Neural Browser Voice + Phonetic Normalizer
       }
 
       if ('speechSynthesis' in window) {
@@ -266,9 +268,6 @@ export const App: React.FC = () => {
       .then((info) => {
         if (info?.lanIp) {
           setLanEndpoint(`${info.lanIp}:${info.port || 4321}`);
-        }
-        if (info?.hasServerGeminiKey) {
-          setHasServerGeminiKey(true);
         }
       })
       .catch(() => {
@@ -335,7 +334,7 @@ export const App: React.FC = () => {
       stopSpeaking();
 
       setSession((prev) => {
-        const usingCloudTts = Boolean(geminiApiKey || hasServerGeminiKey);
+        const usingCloudTts = Boolean(geminiApiKey);
         const result = processVoiceUtterance(
           prev,
           utterance,
@@ -382,7 +381,7 @@ export const App: React.FC = () => {
         return result.nextState;
       });
     },
-    [broadcastSessionState, geminiApiKey, hasServerGeminiKey, speakNaturalBluf, stopSpeaking]
+    [broadcastSessionState, geminiApiKey, speakNaturalBluf, stopSpeaking]
   );
 
   const handleRescanLanDevices = useCallback(async () => {
@@ -599,15 +598,10 @@ export const App: React.FC = () => {
   );
 
   const handleSaveGeminiApiKey = useCallback((key: string) => {
-    setGeminiApiKey(key);
-    try {
-      if (key) {
-        localStorage.setItem('bimodal_gemini_api_key', key);
-      } else {
-        localStorage.removeItem('bimodal_gemini_api_key');
-      }
-    } catch {
-      // ignore
+    const trimmed = key.trim();
+    setGeminiApiKey(trimmed);
+    if (typeof window !== 'undefined') {
+      writeBrowserGeminiApiKey(window.localStorage, trimmed);
     }
   }, []);
 
@@ -694,6 +688,28 @@ export const App: React.FC = () => {
         </header>
 
         <main className="max-w-lg mx-auto px-4 pt-20 space-y-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor="phone-gemini-api-key" className="text-label-sm font-label-sm text-on-surface-variant">
+              Gemini API key
+            </label>
+            <input
+              id="phone-gemini-api-key"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={geminiApiKey}
+              onChange={(e) => handleSaveGeminiApiKey(e.target.value)}
+              placeholder="Stored only in this browser"
+              className="min-w-0 flex-1 rounded-lg bg-surface-container-lowest border border-outline-variant/40 px-3 py-1 text-telemetry-code font-telemetry-code text-on-surface"
+            />
+            <button
+              type="button"
+              onClick={() => handleSaveGeminiApiKey('')}
+              className="px-2.5 py-1 rounded-lg border border-outline-variant/40 text-label-sm font-label-sm text-on-surface-variant cursor-pointer"
+            >
+              Clear
+            </button>
+          </div>
           {/* Primary Voice Jewel Centerpiece */}
           <section className="relative rounded-xl bg-surface-container-low border border-outline-variant/30 p-5 overflow-hidden shadow-2xl">
             <div className="flex items-center justify-between mb-4">
@@ -1071,15 +1087,36 @@ export const App: React.FC = () => {
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <label
+                htmlFor="gemini-api-key"
+                className="text-label-sm font-label-sm text-on-surface-variant"
+              >
+                Gemini API key
+              </label>
               <input
+                id="gemini-api-key"
                 type="password"
+                autoComplete="off"
+                spellCheck={false}
                 value={geminiApiKey}
                 onChange={(e) => handleSaveGeminiApiKey(e.target.value)}
-                placeholder="Optional: Paste GEMINI_API_KEY for cloud gemini-3.8-flash-tts..."
+                placeholder="Stored only in this browser"
+                aria-describedby="gemini-api-key-hint"
                 className="w-72 rounded-lg bg-surface-container-lowest border border-outline-variant/40 px-3 py-1 text-telemetry-code font-telemetry-code text-on-surface"
               />
-              <span className="text-telemetry-code font-telemetry-code text-outline">
+              <button
+                type="button"
+                onClick={() => handleSaveGeminiApiKey('')}
+                className="px-2.5 py-1 rounded-lg border border-outline-variant/40 text-label-sm font-label-sm text-on-surface-variant hover:text-on-surface cursor-pointer"
+              >
+                Clear
+              </button>
+              <span
+                id="gemini-api-key-hint"
+                className="text-telemetry-code font-telemetry-code text-outline"
+              >
+                Saved in this browser only. Sent with each Gemini speech request and not stored on the server.
                 Active: {activeVoiceEngineLabel}
               </span>
             </div>

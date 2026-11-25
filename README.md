@@ -29,6 +29,14 @@ Open on any device on the same LAN (zero PIN codes required):
 - `http://<LAN-IP>:4321/?surface=pad` — Workbench iPad Pro Interactive Receiver
 - `http://<LAN-IP>:4321/?surface=tv` — Office 65" Wall Display Receiver
 
+## Gemini API key
+
+The Gemini API key lives in the browser. A labelled password field (**Gemini API key**) saves it to `localStorage` on that device. **Clear** removes it.
+
+Speech requests that call Gemini (`POST /api/tts`) send the key on that request only, in the `x-gemini-api-key` header and the JSON `apiKey` field. The server uses the key for the duration of the call and then drops it. It does not read a Gemini key from environment variables or files, and it does not write, cache, or log the key. A request without a key is rejected. The key is not put on the LAN WebSocket state bus, which is cached and broadcast to other surfaces.
+
+Without a key stored in the browser, spoken replies stay on the device and use the browser speech engine.
+
 ## Verification
 
 ```bash

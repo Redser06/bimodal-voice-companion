@@ -6,11 +6,11 @@ import { promisify } from 'node:util';
 import type { IncomingMessage } from 'node:http';
 import type { Plugin } from 'vite';
 import { WebSocketServer, WebSocket } from 'ws';
-import { GoogleGenAI } from '@google/genai';
 import {
   discoverLgWebOsTvsViaSsdp,
   triggerLgWebOsScreenTakeover,
 } from './lgWebOsTakeover.ts';
+import { handleTtsRequest } from './geminiTts.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -70,7 +70,6 @@ export function bimodalWsHubPlugin(): Plugin {
             lanIp: getLocalLanIp(),
             port: 4321,
             secondBrainAvailable: fs.existsSync(SECOND_BRAIN_ROOT),
-            hasServerGeminiKey: Boolean(process.env.GEMINI_API_KEY),
             modelPolicy: {
               fastVoiceLoop: 'gemini-3.8-flash',
               ttsVoiceModel: 'gemini-3.8-flash-tts',
@@ -284,10 +283,12 @@ export function bimodalWsHubPlugin(): Plugin {
         });
       });
 
-      // 2. Studio-Grade Neural TTS Endpoint (`gemini-3.8-flash-tts`)
+      // 2. Studio-Grade Neural TTS (`gemini-3.8-flash-tts`).
+      // The key arrives on this request only and is not stored or logged.
       server.middlewares.use('/api/tts', (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405;
+          res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ error: 'Method not allowed' }));
           return;
         }
@@ -296,132 +297,13 @@ export function bimodalWsHubPlugin(): Plugin {
           body += chunk;
         });
         req.on('end', async () => {
-          try {
-            const parsed = JSON.parse(body || '{}');
-            const text = String(parsed.text || '').trim();
-            const voice = String(parsed.voice || 'Kore');
-            const style = String(
-              parsed.style ||
-                'warm, sharp executive colleague in a quick standup, natural conversational flow'
-            );
-            const apiKey =
-              String(parsed.apiKey || '').trim() ||
-              String(req.headers['x-gemini-api-key'] || '').trim() ||
-              process.env.GEMINI_API_KEY ||
-              '';
-
-            if (!apiKey) {
-              // Synthesize clean 24kHz WAV via macOS natural voice engine (`Moira` / `Daniel` / `Karen` / `Samantha`)
-              const macVoiceMap: Record<string, string> = {
-                Kore: 'Moira', // Natural Irish English voice
-                Puck: 'Daniel', // Natural British English voice
-                Aoede: 'Karen', // Natural Australian English voice
-                Charon: 'Samantha', // Natural US English voice
-              };
-              const macVoice = macVoiceMap[voice] || 'Moira';
-              const tmpWav = path.join(
-                os.tmpdir(),
-                `bimodal-tts-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.wav`
-              );
-              try {
-                await execFileAsync('say', [
-                  '-v',
-                  macVoice,
-                  '-r',
-                  '185',
-                  '-o',
-                  tmpWav,
-                  '--data-format=LEI16@24000',
-                  text,
-                ]);
-                const wavBuffer = fs.readFileSync(tmpWav);
-                fs.unlinkSync(tmpWav);
-                res.setHeader('Content-Type', 'application/json');
-                res.end(
-                  JSON.stringify({
-                    ok: true,
-                    model: `macOS-natural-24kHz (${macVoice})`,
-                    voice,
-                    mimeType: 'audio/wav',
-                    audioBase64: wavBuffer.toString('base64'),
-                  })
-                );
-                return;
-              } catch {
-                res.statusCode = 200;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(
-                  JSON.stringify({
-                    ok: false,
-                    reason: 'no_api_key',
-                  })
-                );
-                return;
-              }
-            }
-
-            const client = new GoogleGenAI({ apiKey });
-            const interaction = await client.interactions.create({
-              model: 'gemini-3.8-flash-tts',
-              input: [
-                {
-                  type: 'user_input',
-                  content: [
-                    {
-                      type: 'text',
-                      text,
-                      annotations: [
-                        {
-                          type: 'speech_metadata',
-                          style,
-                        },
-                      ],
-                    },
-                  ],
-                },
-              ],
-              response_format: { type: 'audio' },
-              generation_config: {
-                speech_config: [{ voice }],
-              },
-            });
-
-            const audioData = interaction.output_audio?.data;
-            const mimeType = interaction.output_audio?.mime_type || 'audio/wav';
-
-            if (!audioData) {
-              res.statusCode = 200;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(
-                JSON.stringify({
-                  ok: false,
-                  reason: 'empty_audio',
-                })
-              );
-              return;
-            }
-
-            res.setHeader('Content-Type', 'application/json');
-            res.end(
-              JSON.stringify({
-                ok: true,
-                model: 'gemini-3.8-flash-tts',
-                voice,
-                mimeType,
-                audioBase64: audioData,
-              })
-            );
-          } catch (err) {
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(
-              JSON.stringify({
-                ok: false,
-                reason: 'api_error',
-                error: String(err),
-              })
-            );
-          }
+          const result = await handleTtsRequest({
+            rawBody: body,
+            headerValue: req.headers['x-gemini-api-key'],
+          });
+          res.statusCode = result.statusCode;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result.body));
         });
       });
 
